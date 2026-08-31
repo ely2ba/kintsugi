@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+.env
+.env.*
+local/
+data/
+runs/
+*.safetensors
+*.tar
+AGENTS.md
