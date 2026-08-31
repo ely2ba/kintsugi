@@ -31,6 +31,10 @@ the new tested code separately. Preflight requires the original SPEC and all
 input-manifest hashes to remain identical. This is an engineering correction,
 not a scientific-contract change or a calibration-gate result.
 
+The recovery implementation (`499c61d`) passed 197 tests and was publicly frozen
+in `1716e0e` before continuation. M1 resumed at update 2, which completed with both
+checkpoint saves. M2 remains unauthorized.
+
 Initialization first launched under `938fb1f`. Before any sampling, scoring,
 forward pass, or training update, an overlapping diversity-repeat seed range
 was corrected in `138b24d` and re-frozen in `8dc01c8`. The original untrained

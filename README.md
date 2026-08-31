@@ -11,9 +11,10 @@ as recovering everything that made the model useful.
 Kintsugi asks whether repeated repair preserves future learning, earlier skills,
 and varied valid answers—or leaves a little debt behind.
 
-**Status · v2 calibration, 31 August 2026.** Calibration is incomplete and the
-runner is currently stopped on a checkpoint-saving error. The main experiment
-has not started; there are no v2 study conclusions yet.
+**Status · v2 calibration, 31 August 2026.** Calibration is running. A checkpoint-
+saving error was fixed and the run resumed from its saved state without repeating
+training. The main experiment has not started; there are no v2 study conclusions
+yet. [Execution notes](OPERATIONS.md) record the recovery.
 
 ## The experiment
 
