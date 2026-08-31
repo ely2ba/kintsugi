@@ -9,13 +9,13 @@ from protocol import ORDERS, schedule_seed
 
 
 class MemoryJournal(Journal):
-    """Use Journal.call unchanged; ordinary trajectory tests need no disk I/O."""
+    """Exercise the real journal and evaluation scope in a temporary directory."""
     def __init__(self):
-        self.rows, self.pending, self.completed = [], {}, {}
+        self.temporary = tempfile.TemporaryDirectory()
+        super().__init__(Path(self.temporary.name) / "journal.jsonl")
 
-    def _append(self, row):
-        self.rows.append(row)
-        return row
+    def __del__(self):
+        self.temporary.cleanup()
 
 
 class PhaseBackend:
@@ -238,8 +238,8 @@ class PhaseTests(unittest.TestCase):
                 evaluate, calls = self.learning_evaluator(lambda step: {"gate": 0.8, "if_score": 38 if step < 3 else 35})
 
                 class StopAtBoundary(Journal):
-                    def call(self, operation, inputs, function):
-                        result = super().call(operation, inputs, function)
+                    def call(self, operation, inputs, function, **kwargs):
+                        result = super().call(operation, inputs, function, **kwargs)
                         if operation == "learn/test/" + boundary:
                             raise InterruptedError("stopped after a durable operation")
                         return result
@@ -268,8 +268,8 @@ class PhaseTests(unittest.TestCase):
                     return {"if_score": 41 if step >= success_step else 40}
 
                 class StopAfterCriterion(Journal):
-                    def call(self, operation, inputs, function):
-                        result = super().call(operation, inputs, function)
+                    def call(self, operation, inputs, function, **kwargs):
+                        result = super().call(operation, inputs, function, **kwargs)
                         if operation == "repair/test/criterion/005":
                             raise InterruptedError("stopped after a durable repair criterion")
                         return result

@@ -61,7 +61,7 @@ def measure_m1_checkpoints(api, root, journal, stage, selected_diversity, measur
                              "prompt_tokens": kl_prompts},
         lambda: api.sample(api.sampler(origin["sampler_path"]), kl_prompts,
                            samples=kl_recipe["samples"], max_tokens=kl_recipe["max_tokens"],
-                           temperature=kl_recipe["temperature"], seed=kl_recipe["seed"]))
+                           temperature=kl_recipe["temperature"], seed=kl_recipe["seed"]), recoverable=True)
     panel_manifest = _read(root / f"manifests/diversity/{selected_diversity['candidate']}.json")
     panel = load_rows(root / panel_manifest["path"])
     native = {}
@@ -82,7 +82,8 @@ def measure_m1_checkpoints(api, root, journal, stage, selected_diversity, measur
 
     download(origin)
     origin_heldout = journal.call("closeout/cycle0/if-heldout", {"origin": origin},
-        lambda: evaluate_if(api, origin["sampler_path"], "heldout", schedule_seed("T1", "if-heldout")))
+        lambda: evaluate_if(api, origin["sampler_path"], "heldout", schedule_seed("T1", "if-heldout")),
+        recoverable=True)
     for context in contexts(stage):
         event = context["event"]
         predecessor = event["start_checkpoint"]
@@ -97,7 +98,8 @@ def measure_m1_checkpoints(api, root, journal, stage, selected_diversity, measur
                 kl = journal.call(f"closeout/kl/{key}", {"checkpoint": checkpoint, "reference": "closeout/kl-reference"},
                     lambda: forward_kl(api, checkpoint["sampler_path"], kl_prompts, reference["groups"]))
                 protected = journal.call(f"closeout/if-heldout/{key}", {"checkpoint": checkpoint},
-                    lambda: evaluate_if(api, checkpoint["sampler_path"], "heldout", schedule_seed("T1", "if-heldout")))
+                    lambda: evaluate_if(api, checkpoint["sampler_path"], "heldout", schedule_seed("T1", "if-heldout")),
+                    recoverable=True)
 
                 def diversity():
                     recipe = panel_manifest["sampling"]
@@ -107,7 +109,8 @@ def measure_m1_checkpoints(api, root, journal, stage, selected_diversity, measur
                     return {**diversity_summary(panel, sampled["groups"]), "accounting": sampled["accounting"]}
 
                 diverse = journal.call(f"closeout/diversity/{key}",
-                    {"checkpoint": checkpoint, "panel_sha256": panel_manifest["sha256"]}, diversity)
+                    {"checkpoint": checkpoint, "panel_sha256": panel_manifest["sha256"]}, diversity,
+                    recoverable=True)
                 physical[key] = {"checkpoint": checkpoint, "predecessor": predecessor,
                                   "geometry": geometry, "kl": kl, "if_heldout": protected,
                                   "diversity": diverse, "native": {}}
@@ -126,7 +129,8 @@ def measure_m1_checkpoints(api, root, journal, stage, selected_diversity, measur
                             return evaluate_task(api, client, checkpoint["sampler_path"], heldout,
                                                  manifest, schedule_seed(slot, "evaluate-heldout"))
                         metric = journal.call(f"closeout/native/{key}/{slot}",
-                            {"checkpoint": checkpoint, "manifest": manifest}, task_metric)
+                            {"checkpoint": checkpoint, "manifest": manifest}, task_metric,
+                            recoverable=manifest["metric"] == "verifier_success")
                     if metric.get("valid", True) is False:
                         raise RuntimeError("invalid native task measurement; M1 closeout is incomplete")
                     physical[key]["native"][slot] = metric
@@ -195,9 +199,12 @@ def measured_projection(root, journal, stage, measured):
     for endpoint in ("if_heldout", "kl"):
         units[endpoint] = statistics.mean(token_cost(row[endpoint]["accounting"], prices) for row in physical)
     task_units = measured_task_units(journal, stage, prices)
+    unreconciled = [row["operation"] for row in journal.rows
+                    if row["type"] == "recovery_authorized" and row.get("prior_accounting") == "unavailable"]
     return {**project_m2(task_units, units, prices), "task_units_usd": task_units,
             "measurement_units_usd": units, "price_source": snapshot,
-            "m1_estimated_usd": cost_of_prefix(journal, "", prices)}
+            "m1_estimated_usd": cost_of_prefix(journal, "", prices),
+            "unreconciled_sampling_operations": unreconciled}
 
 
 def lifecycle_exposures(journal, stage, prices):
@@ -208,11 +215,15 @@ def lifecycle_exposures(journal, stage, prices):
         starts = [row["timestamp"] for row in journal.rows
                   if row["type"] == "inflight" and row["operation"] in names]
         ends = [journal.completed[name]["timestamp"] for name in names]
+        durations = [journal.completed[name].get("elapsed_seconds") for name in names]
+        timing_complete = (all(journal.completed[name].get("timing_complete", True) for name in names)
+                           and all(value is not None for value in durations))
         return {"started_at": min(starts) if starts else None,
                 "finished_at": max(ends) if ends else None,
                 "wall_seconds": (datetime.fromisoformat(max(ends)) - datetime.fromisoformat(min(starts))).total_seconds()
                                 if starts and ends else None,
-                "active_wall_seconds": sum(journal.completed[name]["elapsed_seconds"] for name in names)}
+                "active_wall_seconds": sum(durations) if timing_complete else None,
+                "timing_complete": timing_complete}
 
     rows = []
     for context in contexts(stage):
@@ -302,6 +313,11 @@ def finish_m1(api, root, journal, checked, stage):
     projection = measured_projection(root, journal, stage, measured)
     exposures = lifecycle_exposures(journal, stage, projection["prices_usd_per_million_tokens"])
     packet = launch_packet(root, checked, stage, measured, projection, exposures)
+    if projection["unreconciled_sampling_operations"]:
+        packet["caveats"].append(
+            "An interrupted pre-cache sampling evaluation was repeated with explicit approval; "
+            "its original request outcomes and usage were unavailable. The M1 ledger estimate "
+            "excludes that unknown usage pending billing reconciliation; no training update was repeated.")
     result = journal.call("m1/measurement-closeout", {"packet": packet}, lambda: {
         "status": packet["status"], "m1_complete": False, "main_run_authorized": False,
         "measurements": measured, "launch_packet": packet,

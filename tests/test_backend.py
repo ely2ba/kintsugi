@@ -19,6 +19,7 @@ import unittest
 from unittest.mock import create_autospec, patch
 
 import backend
+import eval_cache
 
 
 class Future:
@@ -299,6 +300,37 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(sampler.calls[1][2].seed, 32)
         self.assertEqual(result["groups"][0][0]["text"], "4")
         self.assertEqual(result["accounting"], backend.accounting(prefill_tokens=3, cached_tokens=7, sample_tokens=8))
+
+    def test_immutable_sampler_is_tagged_and_requires_journal_scope(self):
+        sampler, calls = Sampler(), []
+        api = make_backend(NS(create_sampling_client=lambda **kwargs: calls.append(kwargs) or sampler))
+        path = "tinker://run/sampler_weights/A-step-000015"
+        self.assertIs(api.sampler(path), sampler)
+        self.assertEqual(sampler._kintsugi_immutable_model_path, path)
+        self.assertEqual(calls[0]["model_path"], path)
+        with self.assertRaisesRegex(eval_cache.EvaluationRecoveryError, "evaluation_scope"):
+            api.sample(sampler, [[1, 2]], samples=1, max_tokens=3, temperature=0, seed=1)
+        self.assertEqual(sampler.calls, [])
+
+    def test_evaluation_scope_never_retries_mutable_sampling_or_training(self):
+        class FailingSampler(Sampler):
+            def sample(self, prompt, samples, params):
+                self.calls.append((prompt, samples, params))
+                return Future(error=TimeoutError("ambiguous mutable sample"))
+
+        sampler, client, api = FailingSampler(), Client(), make_backend()
+        client.output_error = TimeoutError("ambiguous optimizer input")
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(TimeoutError):
+                with eval_cache.evaluation_scope(directory, "not-recoverable-sampling", "a" * 64):
+                    api.sample(sampler, [[1, 2]], samples=1, max_tokens=3, temperature=1, seed=1)
+            with self.assertRaises(TimeoutError):
+                with eval_cache.evaluation_scope(directory, "not-recoverable-training", "a" * 64):
+                    api.train_step(client, [{"tokens": [1, 2]}], learning_rate=1e-4, step=1)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+        self.assertEqual(len(sampler.calls), 1)
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(client.optimizers, [])
 
     def test_sampling_rejects_bad_logprobs_cap_and_eos(self):
         sampler = Sampler()

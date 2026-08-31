@@ -170,6 +170,23 @@ class CloseoutCostTests(unittest.TestCase):
         # Includes unselected screening and extended-reference expenditure once.
         self.assertEqual(projection["m1_estimated_usd"], 7 * (110 + 220 + 277 + 554) + 84 + 96 + 56 + 9999 + 8888)
 
+    def test_unknown_recovery_duration_is_not_reported_as_exact_active_time(self):
+        event = self.add_event()
+        name = event["branch"] + "/learn/evaluate/001"
+        self.journal.completed[name]["timing_complete"] = False
+        row = closeout.lifecycle_exposures(self.journal, self.stage_for([event]), self.prices)[0]
+        self.assertIsNone(row["competence"]["active_wall_seconds"])
+        self.assertFalse(row["competence"]["timing_complete"])
+        self.assertGreater(row["competence"]["wall_seconds"], 0)
+
+    def test_projection_discloses_unknown_legacy_sampling_usage(self):
+        stage, measured = self.projection_fixture()
+        self.journal.rows.append({"type": "recovery_authorized", "operation": "reference/task/evaluate/015",
+                                  "prior_accounting": "unavailable"})
+        with patch("closeout._read", return_value=self.snapshot):
+            projection = closeout.measured_projection("/unused", self.journal, stage, measured)
+        self.assertEqual(projection["unreconciled_sampling_operations"], ["reference/task/evaluate/015"])
+
     def test_launch_packet_preserves_projection_schema_without_authorizing_M2(self):
         stage, measured = self.projection_fixture()
         with patch("closeout._read", return_value=self.snapshot):

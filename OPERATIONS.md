@@ -35,6 +35,16 @@ The recovery implementation (`499c61d`) passed 197 tests and was publicly frozen
 in `1716e0e` before continuation. M1 resumed at update 2, which completed with both
 checkpoint saves. M2 remains unauthorized.
 
+Later on 2026-08-31, a sampling submission returned HTTP 502 during the evaluation
+after update 15. Both update-15 exports were verified remotely; this was not a
+training failure or a scientific hard-gate result. The old batch-level journal
+did not retain partial sampling responses or request identities. The author
+explicitly authorized recovering this evaluation from the saved checkpoint.
+Its original request outcomes, usage and active duration remain unavailable;
+they must not be represented as zero. The recovery repeats only the evaluation,
+with the original prompts, seed schedule and sampling parameters, before update
+16 can run. No scientific contract or input manifest is changed.
+
 Initialization first launched under `938fb1f`. Before any sampling, scoring,
 forward pass, or training update, an overlapping diversity-repeat seed range
 was corrected in `138b24d` and re-frozen in `8dc01c8`. The original untrained
@@ -120,9 +130,28 @@ explicitly evaluated.
 ## Recovery and accounting
 
 Each remote operation has an append-only start/completion record. Completed
-operations are reused on resume. A request with an unknown outcome halts; it is
-not automatically retried. New branches have fresh Adam state. Only recovery of
-the same interrupted branch restores optimizer state.
+operations are reused on resume. An exclusive driver lock rejects overlapping
+M1 runs before they can read or mutate the journal. Training, optimizer, forward/scoring and state-
+changing operations retain the strict ambiguity guard; this recovery change
+does not authorize replaying them. New branches have fresh Adam state. Only
+recovery of the same interrupted branch restores optimizer state.
+
+Immutable-checkpoint sampling evaluations additionally retain per-prompt request
+identities, acknowledged future IDs, responses and token accounting in ignored
+local evaluation logs. Transient submission retries are bounded and reuse the
+same sampling-session and sequence identity. A known future is retrieved rather
+than replaced. Small in-flight windows limit outstanding work, and successful
+responses are retained even if another request fails. Restored results keep
+their original sample order and seeds; scores never decide whether to retry.
+
+Only explicitly marked sampling-only evaluations can resume an unfinished
+journal operation. Unmarked legacy operations still require an explicit recovery
+record; update 15 has that authorization. Lost requests or corrupt records are
+not grounds to invent a new request identity. Request identity preservation is
+not a claim of independently verified exactly-once billing. Unknown legacy
+usage remains identified for reconciliation, and unknown active durations stay
+unavailable in the lifecycle report. The README stays focused on study status;
+engineering recovery details belong here and in the execution logs.
 
 Two short-lived optimizer-state slots protect completed updates; sampler exports
 use unique step names with the same short expiry. Physical A/B checkpoints receive

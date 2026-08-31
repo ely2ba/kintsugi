@@ -4,8 +4,9 @@ Adapted selectively from kintsugi-v1 repair.py/probe.py/lineage.py/analyze.py at
 d2aa7cd94a0a618169496f0235fa021ea46c0372. No v1 data, thresholds or run paths.
 
 The runner owns durable inflight/done records around EVERY remote operation.
-Exceptions are deliberately not retried: an unfinished operation is ambiguous,
-not permission to repeat paid work. Client-returning methods return SDK clients;
+Only immutable-checkpoint sampling inside an evaluation_scope can recover using
+the SAME persisted request identity. Mutable sampling, training and scoring
+remain fail-closed. Client-returning methods return SDK clients;
 measurement/update/save methods return JSON-safe dictionaries with ``accounting``.
 ``train_tokens`` and ``forward_tokens`` are full input lengths, independently of
 ``gradient_target_tokens`` (completion-mask positions, not prompt positions).
@@ -186,10 +187,15 @@ class Backend:
         return create(path)
 
     def sampler(self, sampler_path):
-        return self.service.create_sampling_client(
-            model_path=_checkpoint_path(sampler_path, "sampler_weights"),
+        path = _checkpoint_path(sampler_path, "sampler_weights")
+        sampler = self.service.create_sampling_client(
+            model_path=path,
             base_model=MODEL, retry_config=self.retry_config,
         )
+        # Only this saved-checkpoint boundary opts into evaluation recovery.
+        # repair_step's freshly refreshed live student is deliberately untagged.
+        sampler._kintsugi_immutable_model_path = path
+        return sampler
 
     def render_prompt(self, prompt):
         """Frozen Qwen non-thinking rendering, with no silent prompt truncation."""
@@ -252,40 +258,51 @@ class Backend:
                 or max_tokens <= 0 or not math.isfinite(temperature) or temperature < 0
                 or type(seed) is not int or seed < 0):
             raise ValueError("invalid sampling parameters")
-        futures = []
-        for index, prompt in enumerate(prompts):
-            params = self.types.SamplingParams(max_tokens=max_tokens, temperature=temperature,
-                                               top_p=1.0, top_k=-1, stop=[self.end_token],
-                                               seed=seed + index)
-            futures.append(sampler.sample(self.sdk.ModelInput.from_ints(prompt), samples, params))
+        parameters = [self.types.SamplingParams(max_tokens=max_tokens, temperature=temperature,
+                                               top_p=1.0, top_k=-1, stop=[self.end_token], seed=seed + index)
+                      for index in range(len(prompts))]
+        if getattr(sampler, "_kintsugi_immutable_model_path", None) is not None:
+            from eval_cache import sample_batch
+            results = sample_batch(sampler, self.sdk, prompts, parameters, samples,
+                                   lambda response, prompt: self._sample_response(response, prompt, samples, max_tokens))
+        else:
+            # Mutable on-policy repair keeps its strict, single-attempt path.
+            futures = [sampler.sample(self.sdk.ModelInput.from_ints(prompt), samples, params)
+                       for prompt, params in zip(prompts, parameters)]
+            results = [self._sample_response(future.result(), prompt, samples, max_tokens)
+                       for prompt, future in zip(prompts, futures)]
         groups, usage = [], accounting()
-        for prompt, future in zip(prompts, futures):
-            response = future.result()
-            if len(response.sequences) != samples:
-                raise RuntimeError("sample returned the wrong sequence count")
-            hit = response.prompt_cache_hit_tokens
-            if type(hit) is not int or not 0 <= hit <= len(prompt):
-                raise RuntimeError("invalid prompt cache-hit accounting")
-            usage["prefill_tokens"] += len(prompt) - hit
-            usage["cached_tokens"] += hit + (samples - 1) * len(prompt)
-            group = []
-            for sequence in response.sequences:
-                tokens = _tokens(sequence.tokens)
-                if sequence.logprobs is None or len(tokens) != len(sequence.logprobs):
-                    raise RuntimeError("sample token/logprob alignment failed")
-                logprobs = _finite(sequence.logprobs, "sample logprob")
-                if len(tokens) > max_tokens:
-                    raise RuntimeError("sample exceeded completion cap")
-                if self.end_token in tokens[:-1]:
-                    raise RuntimeError("sample continued beyond end-of-turn token")
-                reason = str(sequence.stop_reason)
-                text = self.tokenizer.decode(tokens[:-1] if tokens[-1] == self.end_token else tokens,
-                                             skip_special_tokens=False)
-                group.append({"text": text, "tokens": tokens, "logprobs": logprobs,
-                              "stop_reason": reason, "truncated": reason.lower().endswith("length")})
-                usage["sample_tokens"] += len(tokens)
-            groups.append(group)
+        for result in results:
+            groups.append(result["group"])
+            for key in usage:
+                usage[key] += result["accounting"][key]
         return {"groups": groups, "accounting": usage}
+
+    def _sample_response(self, response, prompt, samples, max_tokens):
+        if len(response.sequences) != samples:
+            raise RuntimeError("sample returned the wrong sequence count")
+        hit = response.prompt_cache_hit_tokens
+        if type(hit) is not int or not 0 <= hit <= len(prompt):
+            raise RuntimeError("invalid prompt cache-hit accounting")
+        usage = accounting(prefill_tokens=len(prompt) - hit,
+                           cached_tokens=hit + (samples - 1) * len(prompt))
+        group = []
+        for sequence in response.sequences:
+            tokens = _tokens(sequence.tokens)
+            if sequence.logprobs is None or len(tokens) != len(sequence.logprobs):
+                raise RuntimeError("sample token/logprob alignment failed")
+            logprobs = _finite(sequence.logprobs, "sample logprob")
+            if len(tokens) > max_tokens:
+                raise RuntimeError("sample exceeded completion cap")
+            if self.end_token in tokens[:-1]:
+                raise RuntimeError("sample continued beyond end-of-turn token")
+            reason = str(sequence.stop_reason)
+            text = self.tokenizer.decode(tokens[:-1] if tokens[-1] == self.end_token else tokens,
+                                         skip_special_tokens=False)
+            group.append({"text": text, "tokens": tokens, "logprobs": logprobs,
+                          "stop_reason": reason, "truncated": reason.lower().endswith("length")})
+            usage["sample_tokens"] += len(tokens)
+        return {"group": group, "accounting": usage}
 
     def score(self, sampler, prompt_tokens, groups):
         """Teacher or drift scorer: completion-aligned logprobs and usage estimates."""

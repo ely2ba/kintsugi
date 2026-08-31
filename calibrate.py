@@ -1,8 +1,8 @@
 """M0/M1 execution primitives. There is deliberately no main-run command.
 
-The journal makes a completed operation reusable, and an interrupted operation
-ambiguous. Ambiguous paid work is never retried automatically. A completed update
-contains its optimizer checkpoint before the next operation can begin.
+The journal reuses completed operations. Only explicitly marked, durably cached
+sampling evaluations can resume; interrupted updates remain ambiguous. A
+completed update contains its optimizer checkpoint before the next operation.
 """
 import datetime
 import hashlib
@@ -12,6 +12,7 @@ import os
 import time
 from pathlib import Path
 
+import eval_cache
 from protocol import ACQUISITION_UPDATES, LEARNING_RATES, REFERENCE_EVAL_STEPS
 
 
@@ -19,8 +20,23 @@ class AmbiguousOperation(RuntimeError):
     pass
 
 
+class InvalidMeasurement(RuntimeError):
+    """A scientific evaluation failure, not a transport retry opportunity."""
+
+
 def canonical(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+
+def _sampling_evaluation(operation):
+    """Constrain recovery markers to the existing read-only sampling call sites."""
+    parts = operation.split("/")
+    if parts[0] == "probe" or any(part in ("update", "origin", "download", "A", "B") for part in parts):
+        return False
+    return (operation in ("m1/cycle0/criterion", "closeout/cycle0/if-heldout", "closeout/kl-reference")
+            or parts[-1] == "start"
+            or (len(parts) > 1 and parts[-2] in ("evaluate", "heldout", "criterion", "realization", "if-heldout", "diversity"))
+            or operation.startswith("closeout/native/"))
 
 
 class Journal:
@@ -36,19 +52,83 @@ class Journal:
                 self.rows = [json.loads(line) for line in handle]
         self.pending = {}
         self.completed = {}
+        self.attempts = {}
         for row in self.rows:
-            key = row["operation"]
-            if row["type"] == "inflight":
-                if key in self.pending or key in self.completed:
-                    raise AmbiguousOperation(f"duplicate operation: {key}")
-                self.pending[key] = row
-            elif row["type"] == "complete":
-                if key not in self.pending:
-                    raise AmbiguousOperation(f"completion has no start: {key}")
-                self.pending.pop(key)
-                self.completed[key] = row
-            else:
-                raise ValueError(f"unknown journal event: {row['type']}")
+            self._accept(row)
+
+    def _accept(self, row):
+        canonical(row)
+        key, event = row["operation"], row["type"]
+        if event == "inflight":
+            if self.pending or key in self.completed:
+                raise AmbiguousOperation(f"duplicate or overlapping operation: {key}")
+            if "recoverable" in row and (row["recoverable"] is not True or not _sampling_evaluation(key)):
+                raise AmbiguousOperation(f"invalid evaluation recovery marker: {key}")
+            self.pending[key] = row
+            self.attempts[key] = {"attempt": 1, "active": True, "elapsed_seconds": 0.0,
+                                  "timing_complete": True, "recoverable": row.get("recoverable", False),
+                                  "authorized": False, "blocked": False}
+            return
+        if event == "implementation_revision":
+            revision = row["result"]
+            expected = {"test_commit", "freeze_sha256", "identity_freeze_sha256",
+                        "resume_from_freeze_commit", "original_test_commit"}
+            identity = self.completed.get("m1/identity", {}).get("result", {})
+            pending = self.pending.get(row.get("pending_operation"))
+            if (set(revision) != expected or key != f"m1/implementation/{revision['freeze_sha256']}"
+                    or key in self.completed or pending is None
+                    or row.get("pending_inputs_sha256") != pending["inputs_sha256"]
+                    or row["inputs_sha256"] != hashlib.sha256(canonical(revision).encode()).hexdigest()
+                    or revision["identity_freeze_sha256"] != identity.get("freeze_sha256")
+                    or "m1/origin" not in self.completed or not self.recoverable_pending()):
+                raise AmbiguousOperation(f"invalid local implementation revision: {key}")
+            self.completed[key] = row
+            return
+        if event not in ("complete", "failed", "resume", "recovery_authorized"):
+            raise ValueError(f"unknown journal event: {event}")
+        if key not in self.pending:
+            raise AmbiguousOperation(f"{event} has no start: {key}")
+        if row["inputs_sha256"] != self.pending[key]["inputs_sha256"]:
+            raise AmbiguousOperation(f"{event} input hash mismatch: {key}")
+        attempt = self.attempts[key]
+        if event == "recovery_authorized":
+            if (not _sampling_evaluation(key) or row.get("recoverable") is not True
+                    or not isinstance(row.get("reason"), str) or not row["reason"].strip()
+                    or attempt["authorized"] or attempt["blocked"]):
+                raise AmbiguousOperation(f"invalid evaluation recovery authorization: {key}")
+            attempt.update(recoverable=True, authorized=True)
+        elif event == "resume":
+            previous_status = "interrupted" if attempt["active"] else "failed"
+            if (not attempt["recoverable"] or attempt["blocked"]
+                    or row.get("attempt") != attempt["attempt"] + 1
+                    or row.get("previous_attempt_status") != previous_status):
+                raise AmbiguousOperation(f"invalid evaluation resume: {key}")
+            if attempt["active"]:
+                attempt["timing_complete"] = False
+            attempt.update(attempt=row["attempt"], active=True)
+        elif event == "failed":
+            elapsed = row.get("elapsed_seconds")
+            if (not attempt["active"] or row.get("attempt") != attempt["attempt"]
+                    or row.get("attempt_status") != "failed" or not isinstance(row.get("retryable"), bool)
+                    or not isinstance(elapsed, (int, float)) or not math.isfinite(elapsed) or elapsed < 0
+                    or (row["retryable"] and not attempt["recoverable"])):
+                raise AmbiguousOperation(f"invalid failed attempt: {key}")
+            attempt["elapsed_seconds"] += elapsed
+            attempt.update(active=False, blocked=not row["retryable"])
+        else:
+            if "attempt" in row and row["attempt"] != attempt["attempt"]:
+                raise AmbiguousOperation(f"completion attempt mismatch: {key}")
+            self.pending.pop(key)
+            self.attempts.pop(key)
+            self.completed[key] = row
+
+    def recoverable_pending(self):
+        """Only a single prospectively marked or explicitly authorized evaluation."""
+        if len(self.pending) != 1:
+            return False
+        key = next(iter(self.pending))
+        attempt = self.attempts[key]
+        return _sampling_evaluation(key) and attempt["recoverable"] and not attempt["blocked"]
 
     def _append(self, row):
         row = {"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(), **row}
@@ -59,26 +139,51 @@ class Journal:
         self.rows.append(row)
         return row
 
-    def call(self, operation, inputs, function):
+    def _record(self, row):
+        self._accept(self._append(row))
+
+    def call(self, operation, inputs, function, *, recoverable=False):
         digest = hashlib.sha256(canonical(inputs).encode()).hexdigest()
         if operation in self.completed:
             row = self.completed[operation]
             if row["inputs_sha256"] != digest:
                 raise RuntimeError(f"resume contract changed: {operation}")
             return row["result"]
+        if recoverable and not _sampling_evaluation(operation):
+            raise AmbiguousOperation(f"not a recoverable sampling evaluation: {operation}")
         if self.pending:
-            raise AmbiguousOperation("unresolved operation(s): " + ", ".join(sorted(self.pending)))
-        begun = self._append({"type": "inflight", "operation": operation, "inputs_sha256": digest})
-        self.pending[operation] = begun
+            if operation in self.pending and self.pending[operation]["inputs_sha256"] != digest:
+                raise RuntimeError(f"resume contract changed: {operation}")
+            if operation not in self.pending or not recoverable or not self.recoverable_pending():
+                raise AmbiguousOperation("unresolved operation(s): " + ", ".join(sorted(self.pending)))
+            attempt = self.attempts[operation]
+            self._record({"type": "resume", "operation": operation, "inputs_sha256": digest,
+                          "attempt": attempt["attempt"] + 1, "attempt_status": "inflight",
+                          "previous_attempt_status": "interrupted" if attempt["active"] else "failed"})
+        else:
+            marker = {"recoverable": True} if recoverable else {}
+            self._record({"type": "inflight", "operation": operation, "inputs_sha256": digest, **marker})
+        attempt = self.attempts[operation]
         started = time.monotonic()
-        result = function()
-        # Serializability/finite-value checks happen before acknowledging work.
-        canonical(result)
-        row = self._append({"type": "complete", "operation": operation,
-                            "inputs_sha256": digest, "elapsed_seconds": time.monotonic() - started,
-                            "result": result})
-        self.completed[operation] = row
-        self.pending.pop(operation)
+        validating = False
+        try:
+            with eval_cache.evaluation_scope(self.path.parent / "evaluations", operation, digest):
+                result = function()
+            # Invalid scientific values are never made retryable by the cache.
+            validating = True
+            canonical(result)
+        except Exception as error:
+            retryable = recoverable and not validating and isinstance(error, eval_cache.SamplingTransportError)
+            self._record({"type": "failed", "operation": operation, "inputs_sha256": digest,
+                          "attempt": attempt["attempt"], "attempt_status": "failed",
+                          "elapsed_seconds": time.monotonic() - started,
+                          "retryable": retryable, "error_type": type(error).__name__})
+            raise
+        elapsed = time.monotonic() - started
+        self._record({"type": "complete", "operation": operation, "inputs_sha256": digest,
+                      "attempt": attempt["attempt"], "attempt_status": "complete",
+                      "attempt_elapsed_seconds": elapsed, "elapsed_seconds": attempt["elapsed_seconds"] + elapsed,
+                      "timing_complete": attempt["timing_complete"], "result": result})
         return result
 
 
@@ -150,7 +255,8 @@ def reference_sweep(backend, origin, task, journal, evaluate):
                     return evaluate(client, sampler_path, step)
 
                 result = journal.call(operation, {**identity, "step": step, "state": state,
-                                                  "sampler_path": sampler_path}, measure)
+                                                  "sampler_path": sampler_path}, measure,
+                                      recoverable=task.get("metric") == "verifier_success")
                 valid = result.get("valid", True) and all(
                     isinstance(result.get(key), (int, float)) and math.isfinite(result[key])
                     for key in ("gate", "heldout"))
@@ -186,10 +292,11 @@ def learning_phase(backend, origin, task, rows, arm, thresholds, journal, branch
             client = backend.branch(state, resume=step > 0)
         result = evaluate(kind, client, sampler, step)
         if result.get("valid", True) is False:
-            raise RuntimeError("invalid learning measurement; no automatic retuning or replay")
+            raise InvalidMeasurement("invalid learning measurement; no automatic retuning or replay")
         return result
 
-    start = journal.call(f"{branch}/start", identity, lambda: measure("start", 0))
+    recoverable = task.get("metric") == "verifier_success"
+    start = journal.call(f"{branch}/start", identity, lambda: measure("start", 0), recoverable=recoverable)
     points, target_tokens = [], 0
     for step in range(1, ACQUISITION_UPDATES + 1):
         def update():
@@ -207,12 +314,12 @@ def learning_phase(backend, origin, task, rows, arm, thresholds, journal, branch
         target_tokens += result["accounting"]["gradient_target_tokens"]
         state, sampler = result["checkpoint"]["state_path"], result["checkpoint"]["sampler_path"]
         point = journal.call(f"{branch}/evaluate/{step:03d}", {**identity, "state": state, "step": step},
-                             lambda: measure("update", step))
+                             lambda: measure("update", step), recoverable=recoverable)
         points.append({**point, "step": step, "target_tokens": target_tokens})
         decision = learning_decision(arm, start, points, thresholds)
         if decision["stop"]:
             heldout = journal.call(f"{branch}/heldout/{step:03d}", {**identity, "state": state, "step": step},
-                                   lambda: measure("heldout", step))
+                                   lambda: measure("heldout", step), recoverable=recoverable)
             points[-1]["heldout"] = heldout["heldout"]
             decision = learning_decision(arm, start, points, thresholds)
 
@@ -270,7 +377,7 @@ def repair_phase(backend, a, a_score, origin, previous_b, arm, cycle, task_slot,
         if step % REPAIR_CHECK_EVERY:
             continue
         checked = journal.call(f"{branch}/criterion/{step:03d}", {**identity, "step": step, "sampler": sampler_path},
-                               lambda: evaluate_if(sampler_path, step))
+                               lambda: evaluate_if(sampler_path, step), recoverable=True)
         checks.append({**checked, "step": step})
         decision = repair_decision(arm, a_score, checks, thresholds)
         if decision["stop"]:

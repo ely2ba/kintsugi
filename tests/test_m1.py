@@ -1,5 +1,6 @@
 import contextlib
 import copy
+import fcntl
 import hashlib
 import io
 import json
@@ -10,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from calibrate import Journal
+import eval_cache
 import m1
 from protocol import LEARNING_RATES
 
@@ -18,7 +20,7 @@ class MemoryJournal:
     def __init__(self):
         self.calls = []
 
-    def call(self, operation, inputs, function):
+    def call(self, operation, inputs, function, **kwargs):
         self.calls.append(operation)
         return function()
 
@@ -179,6 +181,26 @@ class PersistenceTests(unittest.TestCase):
 
 
 class LaunchGateTests(unittest.TestCase):
+    def test_duplicate_driver_rejects_before_journal_read_or_write_and_backend(self):
+        checked = {"freeze_sha256": "frozen", "measurement": measurement_manifest()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runs/m1/journal.jsonl"
+            journal = Journal(path)
+            journal.call("existing", {}, lambda: {"value": 1})
+            before = path.read_bytes()
+            with (path.parent / "driver.lock").open("a") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with patch("m1.preflight", return_value=checked), patch("m1.Backend.connect") as connect, \
+                     patch("m1.calibrate.Journal") as create_journal:
+                    with self.assertRaisesRegex(m1.calibrate.AmbiguousOperation, "another M1 driver"):
+                        m1.run(directory, project_id="project", keychain_service="explicit")
+                    connect.assert_not_called()
+                    create_journal.assert_not_called()
+            self.assertEqual(path.read_bytes(), before)
+            # Closing the descriptor releases the lock even after an exception.
+            with (path.parent / "driver.lock").open("a") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
     def test_missing_freeze_blocks_before_backend_or_credentials(self):
         with tempfile.TemporaryDirectory() as directory, patch("m1.Backend.connect") as connect:
             with self.assertRaisesRegex(RuntimeError, "freeze.json"):
@@ -393,6 +415,94 @@ class ImplementationRevisionTests(unittest.TestCase):
                                keychain_service="explicit")
                     connect.assert_not_called()
                 self.assertEqual(path.read_bytes(), before)
+
+    def test_pending_evaluation_reuses_origin_and_logs_local_revision_once(self):
+        origin, criterion = checkpoint("completed-original"), {"if_score": 43}
+        operation, inputs = "reference/test/1e-05/evaluate/015", {"state": "immutable"}
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "runs/m1/journal.jsonl"
+                journal = Journal(path)
+                journal.call("m1/identity", self.identity, lambda: self.identity)
+                journal.call("m1/origin", self.identity, lambda: origin)
+                journal.call("m1/cycle0/criterion", {"origin": origin}, lambda: criterion)
+                journal.call("m1/if-thresholds", {"criterion": criterion}, lambda: m1.rules.if_thresholds(43))
+                if legacy:
+                    digest = hashlib.sha256(m1.calibrate.canonical(inputs).encode()).hexdigest()
+                    journal._append({"type": "inflight", "operation": operation, "inputs_sha256": digest})
+                    journal._append({"type": "recovery_authorized", "operation": operation,
+                                     "inputs_sha256": digest, "recoverable": True,
+                                     "reason": "Explicit approval to resume immutable evaluation 15."})
+                else:
+                    with self.assertRaises(eval_cache.SamplingTransportError):
+                        journal.call(operation, inputs, lambda: (_ for _ in ()).throw(eval_cache.SamplingTransportError()), recoverable=True)
+                before = path.read_bytes()
+
+                def screen(api, original, root, limits, prompts, resumed, repeats):
+                    self.assertEqual(original, origin)
+                    resumed.call(operation, inputs, lambda: {"gate": 1}, recoverable=True)
+                    return {"status": "m1_failed", "failure": "local test stops after recovery", "m1_complete": False}
+
+                with patch("m1.preflight", return_value=self.checked), patch("m1.Backend.connect") as connect, \
+                     patch("m1.measure.evaluate_if") as evaluate, \
+                     patch("m1.data.load_rows", return_value=[{}] + [{"prompt": "prompt"}] * 2000), \
+                     patch("m1.data.render_repair_prompt", return_value=[1]), \
+                     patch("m1.screen_tasks", side_effect=screen) as screening:
+                    result = m1.run(directory, project_id=self.project_id, keychain_service="explicit")
+                    after = path.read_bytes()
+                    self.assertTrue(after.startswith(before))
+                    self.assertEqual(m1.run(directory, project_id=self.project_id, keychain_service="explicit"), result)
+                    self.assertEqual(path.read_bytes(), after)
+                    connect.assert_called_once()
+                    screening.assert_called_once()
+                    connect.return_value.origin.assert_not_called()
+                    connect.return_value.save.assert_not_called()
+                    evaluate.assert_not_called()
+                resumed = Journal(path)
+                revisions = [row for row in resumed.rows if row["type"] == "implementation_revision"]
+                self.assertEqual(len(revisions), 1)
+                self.assertEqual(revisions[0]["pending_operation"], operation)
+                self.assertEqual(revisions[0]["result"]["identity_freeze_sha256"], self.original_sha)
+                self.assertEqual(resumed.completed[operation]["timing_complete"], not legacy)
+                self.assertFalse(resumed.pending)
+
+    def test_pending_evaluation_still_checks_project_model_seed_before_backend(self):
+        operation = "reference/test/1e-05/evaluate/015"
+        for changed in ("project", "model", "seed"):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "runs/m1/journal.jsonl"
+                journal = Journal(path)
+                journal.call("m1/identity", self.identity, lambda: self.identity)
+                journal.call("m1/origin", self.identity, lambda: checkpoint("original"))
+                with self.assertRaises(eval_cache.SamplingTransportError):
+                    journal.call(operation, {}, lambda: (_ for _ in ()).throw(eval_cache.SamplingTransportError()), recoverable=True)
+                before = path.read_bytes()
+                with patch("m1.preflight", return_value=self.checked), patch("m1.Backend.connect") as connect, \
+                     patch("m1.MODEL", "changed" if changed == "model" else self.identity["model"]), \
+                     patch("m1.LORA_SEED", self.identity["lora_seed"] + (changed == "seed")):
+                    with self.assertRaisesRegex(RuntimeError, "resume contract changed: m1/identity"):
+                        m1.run(directory, project_id="changed" if changed == "project" else self.project_id,
+                               keychain_service="explicit")
+                    connect.assert_not_called()
+                self.assertEqual(path.read_bytes(), before)
+
+    def test_local_revision_event_cannot_hide_an_unseen_pending_operation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.jsonl"
+            journal = Journal(path)
+            journal.call("m1/identity", self.identity, lambda: self.identity)
+            journal.call("m1/origin", self.identity, lambda: checkpoint("original"))
+            operation = "reference/test/1e-05/evaluate/015"
+            with self.assertRaises(eval_cache.SamplingTransportError):
+                journal.call(operation, {}, lambda: (_ for _ in ()).throw(eval_cache.SamplingTransportError()), recoverable=True)
+            revision = {key: self.checked[key] for key in ("test_commit", "freeze_sha256", "identity_freeze_sha256",
+                                                          "resume_from_freeze_commit", "original_test_commit")}
+            journal._append({"type": "implementation_revision", "operation": "m1/implementation/current-freeze",
+                             "inputs_sha256": hashlib.sha256(m1.calibrate.canonical(revision).encode()).hexdigest(),
+                             "pending_operation": "unseen", "pending_inputs_sha256": journal.pending[operation]["inputs_sha256"],
+                             "result": revision})
+            with self.assertRaises(m1.calibrate.AmbiguousOperation):
+                Journal(path)
 
 
 class ProbeStageTests(unittest.TestCase):

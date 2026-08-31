@@ -7,6 +7,7 @@ Every remote operation is enclosed by the existing append-only M1 journal.
 """
 
 import argparse
+import fcntl
 import hashlib
 import json
 from pathlib import Path
@@ -507,7 +508,8 @@ def calibrate_diversity(api, origin, root, journal, measurement):
                     "accounting": sampled["accounting"]}
 
         identity = {"origin": origin, "candidate": candidate, "manifest": manifest}
-        first = journal.call(f"diversity/{candidate}/realization/0", {**identity, "repeat": 0}, lambda: evaluate(0))
+        first = journal.call(f"diversity/{candidate}/realization/0", {**identity, "repeat": 0},
+                             lambda: evaluate(0), recoverable=True)
         qualified = diversity_qualification(examples, first, manifest)
         if not qualified["passes"]:
             attempts.append({"candidate": candidate, "qualification": qualified, "first_realization": first})
@@ -515,7 +517,7 @@ def calibrate_diversity(api, origin, root, journal, measurement):
         realizations = [first]
         for repeat in (1, 2):
             realizations.append(journal.call(f"diversity/{candidate}/realization/{repeat}",
-                                             {**identity, "repeat": repeat}, lambda: evaluate(repeat)))
+                                             {**identity, "repeat": repeat}, lambda: evaluate(repeat), recoverable=True))
         noise = {}
         for metric in ("pass1", "pass8", "coverage_gap", "unique_valid_outputs", "strategy_families",
                        "strategy_family_concentration", "sampled_token_surprisal", "mean_completion_tokens", "truncation_rate"):
@@ -531,12 +533,41 @@ def calibrate_diversity(api, origin, root, journal, measurement):
     return {"status": "m1_failed", "failure": "no_valid_diversity_panel", "attempts": attempts, "m1_complete": False}
 
 
+def _record_implementation_revision(journal, revision):
+    """Append only trusted local preflight provenance while evaluation is pending."""
+    operation = f"m1/implementation/{revision['freeze_sha256']}"
+    if not journal.pending or operation in journal.completed:
+        return journal.call(operation, revision, lambda: revision)
+    if not journal.recoverable_pending():
+        raise calibrate.AmbiguousOperation("implementation revision cannot authorize pending paid work")
+    pending_operation, pending = next(iter(journal.pending.items()))
+    journal._record({"type": "implementation_revision", "operation": operation,
+                     "inputs_sha256": hashlib.sha256(calibrate.canonical(revision).encode()).hexdigest(),
+                     "pending_operation": pending_operation, "pending_inputs_sha256": pending["inputs_sha256"],
+                     "elapsed_seconds": 0.0, "timing_complete": True, "result": revision})
+    return revision
+
+
 def run(root, *, project_id, keychain_service):
     root = Path(root).resolve()
     checked = preflight(root)  # Must precede credentials, service creation and all paid work.
+    lock_path = root / "runs/m1/driver.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise calibrate.AmbiguousOperation("another M1 driver is active; journal unchanged") from error
+        return _run_locked(root, checked, project_id=project_id, keychain_service=keychain_service)
+
+
+def _run_locked(root, checked, *, project_id, keychain_service):
+    """The complete journal/remote lifecycle is inside run's exclusive lock."""
     journal = calibrate.Journal(root / "runs/m1/journal.jsonl")
-    if journal.pending:
+    if journal.pending and not journal.recoverable_pending():
         raise calibrate.AmbiguousOperation("unresolved M1 operation; no paid call will be retried")
+    if journal.pending and not {"m1/identity", "m1/origin"} <= journal.completed.keys():
+        raise calibrate.AmbiguousOperation("evaluation recovery requires completed original identity and origin")
     implementation_resume = checked.get("resume_from_freeze_commit") is not None
     if implementation_resume and not {"m1/identity", "m1/origin"} <= journal.completed.keys():
         raise RuntimeError("implementation resume requires the existing completed original identity and origin")
@@ -551,7 +582,7 @@ def run(root, *, project_id, keychain_service):
                     "identity_freeze_sha256": identity["freeze_sha256"],
                     "resume_from_freeze_commit": checked["resume_from_freeze_commit"],
                     "original_test_commit": checked["original_test_commit"]}
-        journal.call(f"m1/implementation/{checked['freeze_sha256']}", revision, lambda: revision)
+        _record_implementation_revision(journal, revision)
     previous = journal.completed.get("m1/measurement-closeout")
     if previous:
         data.write_once(root / "runs/m1/launch_packet.json", previous["result"]["launch_packet"])
@@ -574,7 +605,7 @@ def run(root, *, project_id, keychain_service):
     origin = journal.call("m1/origin", identity, create_origin)
     criterion = journal.call("m1/cycle0/criterion", {"origin": origin},
                               lambda: measure.evaluate_if(api, origin["sampler_path"], "criterion",
-                                                          schedule_seed("T1", "evaluate-if")))
+                                                          schedule_seed("T1", "evaluate-if")), recoverable=True)
     if_limits = rules.if_thresholds(criterion["if_score"])
     if_limits = journal.call("m1/if-thresholds", {"criterion": criterion}, lambda: if_limits)
     pool = data.load_rows(root / "data/repair_pool.jsonl")
