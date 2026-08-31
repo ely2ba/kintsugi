@@ -9,8 +9,15 @@ The M0/M1 runner and its deterministic tests are implemented. The author has
 frozen the measurement-noise rule in SPEC §17.0 and
 `manifests/measurement.json`. Execution requires the public tested-code/input
 freeze. A separate `kintsugi-v2` Tinker project has been created; its operational
-ID stays local. Calibration started from public input-freeze commit
-`938fb1f143bf3feda349a122c67e4fcc26a28c29`, with 188 passing local tests.
+ID stays local. The current public input-freeze commit is
+`8dc01c8a85ea2d1e6706a76ad4270d30b23438bd`, with 188 passing local tests.
+
+Initialization first launched under `938fb1f`. Before any sampling, scoring,
+forward pass, or training update, an overlapping diversity-repeat seed range
+was corrected in `138b24d` and re-frozen in `8dc01c8`. The original untrained
+cycle-0 state and sampler exports were preserved; no scientific trajectory was
+restarted. The initial administrative journal is retained alongside the active
+journal. This is an implementation correction, not a scientific-contract change.
 
 M2 has no execution command. It requires the separate launch authorization after
 M1 passes and the full twelve-lineage projection is delivered.

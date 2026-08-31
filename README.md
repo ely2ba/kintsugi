@@ -10,7 +10,7 @@ competence and measured instruction-following damage; repair is then evaluated
 for visible recovery, future learning, retention, diversity, and lifecycle cost.
 
 Status: M1 calibration launched on 2026-08-31 after 188 local tests and the
-[published input freeze](https://github.com/ely2ba/kintsugi/commit/938fb1f143bf3feda349a122c67e4fcc26a28c29).
+[published input freeze](https://github.com/ely2ba/kintsugi/commit/8dc01c8a85ea2d1e6706a76ad4270d30b23438bd).
 The acquisition reference sweep now uses the registered 120-update budget, with
 independent gate and held-out reference scores. No calibration outcome is available
 yet, and M2 has not started. M1 must pass the registered task,
