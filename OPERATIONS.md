@@ -5,13 +5,20 @@ not additional scientific options. No paid v2 call has been made.
 
 ## Current boundary
 
-Local implementation and deterministic tests are in progress. M1 is **not yet
-ready to launch**. In particular, the rule for constructing the §17 noise bounds
-awaits the author's definition. `manifests/measurement.json` records that missing
-value explicitly; there is no default multiplier or confidence bound.
+The M0/M1 runner and its deterministic tests are implemented. The author has
+frozen the measurement-noise rule in SPEC §17.0 and
+`manifests/measurement.json`. Execution requires the public tested-code/input
+freeze. A separate `kintsugi-v2` Tinker project has been created; its operational
+ID stays local. Calibration has not started.
 
 M2 has no execution command. It requires the separate launch authorization after
 M1 passes and the full twelve-lineage projection is delivered.
+
+The runner stops immediately on a registered M1 failure. If every gate passes,
+it downloads and measures selected A/B checkpoints, completes retention and the
+registered drift panel, and writes `runs/m1/launch_packet.json`. That packet is
+not an M2 authorization: the completed calibration package and selections must
+be published, and their exact freeze commit supplied in the launch message.
 
 ## Local checks and data
 
@@ -19,7 +26,14 @@ M1 passes and the full twelve-lineage projection is delivered.
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -r requirements.txt
 .venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python m1.py preflight
 ```
+
+After the public freeze passes preflight, the explicit M1 command is
+`.venv/bin/python m1.py run --project-id <fresh-v2-project-id> --keychain-service <keychain-item>`.
+It has no implicit project, credential, or main-run fallback. A completed
+measurement handoff or scientific stop is returned locally on resume, without
+connecting to the service again.
 
 Public manifests bind the task generators, sources, splits, token rows, and four
 orders. Downloaded source text, training rows, checkpoints and operational logs
@@ -43,6 +57,13 @@ underlying instance-to-split assignment.
 
 All main task and repair schedules are keyed by task slot, never by arm or order.
 The two screening realizations are disjoint data, not extra training seeds.
+
+Repair keeps v1's 1,024-token user-prompt preprocessing before chat rendering;
+acquisition prompts are not truncated by that rule. This affects 49 of the
+2,000 frozen repair prompts. The repair completion cap remains 4,096 tokens.
+Diversity candidates qualify on their first frozen sampling realization;
+three independent complete realizations under the selected recipe supply its
+registered noise bound. Their SD is not divided by the square root of three.
 
 ## Reference versus screening
 

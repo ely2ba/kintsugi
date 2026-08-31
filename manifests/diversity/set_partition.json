@@ -16,6 +16,6 @@
     "seed": 20260831,
     "temperature": 1.0
   },
-  "selection": "first qualifying candidate in graph_coloring, set_partition order; no post-outcome tuning",
+  "selection": "first qualifying candidate in graph_coloring, set_partition order; qualification uses the first frozen sampling realization, three independent complete realizations supply its noise bound; no post-outcome tuning",
   "sha256": "270f3f7feb1c1af430321a3e6cb0894b7cdd9fd1022e33f34d96a77a1ab588b9"
 }

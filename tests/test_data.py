@@ -30,6 +30,20 @@ class DataTests(unittest.TestCase):
             rows = [{"prompt_tokens": [1] * prompt, "completion_tokens": [2] * completion}] * 128
             self.assertEqual(data.fixed_synthetic_batch(rows)[0], expected)
 
+    def test_repair_keeps_v1_prompt_crop_without_cropping_acquisition(self):
+        class Tokenizer:
+            def encode(self, text, **kwargs):
+                return [ord(character) for character in text]
+
+            def decode(self, tokens):
+                return "".join(chr(token) for token in tokens)
+        tokenizer = Tokenizer()
+        prompt = "a" * 1100
+        self.assertEqual(data.render_repair_prompt(tokenizer, prompt),
+                         data.render_prompt(tokenizer, "a" * 1024))
+        self.assertEqual(len(data.render_prompt(tokenizer, prompt)) -
+                         len(data.render_repair_prompt(tokenizer, prompt)), 76)
+
     def test_document_level_splits_before_chunking_and_duplicate_removal(self):
         class Tokenizer:
             def encode(self, text, **kwargs):

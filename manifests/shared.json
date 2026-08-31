@@ -17,5 +17,6 @@
     "split": "train",
     "type": "manifest"
   },
-  "repair_pool_file_sha256": "9357e2ce6c9587a88c599f541eed13f8a68862a7594b90a97aa2f614d9b224c9"
+  "repair_pool_file_sha256": "9357e2ce6c9587a88c599f541eed13f8a68862a7594b90a97aa2f614d9b224c9",
+  "repair_prompt_preprocessing": "v1 repair.py: truncate user text to 1024 tokenizer tokens before non-thinking chat rendering"
 }

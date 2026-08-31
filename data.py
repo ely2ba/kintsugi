@@ -95,6 +95,14 @@ def render_prompt(tokenizer, prompt):
     return tokenizer.encode(text, add_special_tokens=False)
 
 
+def render_repair_prompt(tokenizer, prompt):
+    """Preserve v1 repair.py's 1,024-token user-prompt preprocessing only."""
+    raw = tokenizer.encode(prompt, add_special_tokens=False)
+    if len(raw) > 1024:
+        prompt = tokenizer.decode(raw[:1024])
+    return render_prompt(tokenizer, prompt)
+
+
 def encode_example(tokenizer, example):
     return {**example, "prompt_tokens": render_prompt(tokenizer, example["prompt"]),
             "completion_tokens": tokenizer.encode(example["completion"] + "<|im_end|>", add_special_tokens=False)}
@@ -242,7 +250,8 @@ def freeze_shared(root, v1_pool):
     assert_prompt_hash_disjoint(pool[1:])
     write_rows(root / "data/repair_pool.jsonl", pool)
     write_once(root / "manifests/shared.json", {"if_hashes": IF_HASHES, "repair_pool": pool[0],
-                                               "repair_pool_file_sha256": sha256_file(root / "data/repair_pool.jsonl")})
+                                               "repair_pool_file_sha256": sha256_file(root / "data/repair_pool.jsonl"),
+                                               "repair_prompt_preprocessing": "v1 repair.py: truncate user text to 1024 tokenizer tokens before non-thinking chat rendering"})
     for order, manifest in order_manifests().items():
         write_once(root / f"manifests/orders/{order}.json", manifest)
     write_once(root / "manifests/sources.json", SOURCES)
@@ -297,7 +306,7 @@ def freeze_diversity(root, candidate, tokenizer):
                 "safe_length_rule": {"max_truncation_rate": 0.0, "p95_tokens_at_most": 384},
                 "family_coverage": sum(row["family_count"] >= 4 for row in rows) / len(rows),
                 "family_definition": "unlabeled vertex partitions / unordered equal-sum partitions; not latent reasoning",
-                "selection": "first qualifying candidate in graph_coloring, set_partition order; no post-outcome tuning"}
+                "selection": "first qualifying candidate in graph_coloring, set_partition order; qualification uses the first frozen sampling realization, three independent complete realizations supply its noise bound; no post-outcome tuning"}
     write_once(root / f"manifests/diversity/{candidate}.json", manifest)
     return manifest
 
