@@ -1,7 +1,7 @@
 # Running the registered study
 
 The scientific authority is [SPEC.md](SPEC.md). This file describes execution,
-not additional scientific options. No paid v2 call has been made.
+not additional scientific options. M1 was launched on 2026-08-31; M2 is not authorized.
 
 ## Current boundary
 
@@ -9,7 +9,8 @@ The M0/M1 runner and its deterministic tests are implemented. The author has
 frozen the measurement-noise rule in SPEC §17.0 and
 `manifests/measurement.json`. Execution requires the public tested-code/input
 freeze. A separate `kintsugi-v2` Tinker project has been created; its operational
-ID stays local. Calibration has not started.
+ID stays local. Calibration started from public input-freeze commit
+`938fb1f143bf3feda349a122c67e4fcc26a28c29`, with 188 passing local tests.
 
 M2 has no execution command. It requires the separate launch authorization after
 M1 passes and the full twelve-lineage projection is delivered.
