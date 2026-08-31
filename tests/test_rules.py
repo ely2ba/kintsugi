@@ -480,6 +480,135 @@ class ProbeRulesTest(unittest.TestCase):
             rules.select_task_recipe(recipes)
 
 
+class MeasurementNoiseTest(unittest.TestCase):
+    def test_three_single_endpoint_repeats_use_sample_sd_and_sqrt_two_once(self):
+        result = rules.measurement_noise_bound([1, 2, 3])
+        self.assertEqual(result["status"], "defined")
+        self.assertEqual(result["count"], 3)
+        self.assertEqual(result["sample_sd"], 1)
+        self.assertEqual(result["paired_difference_sd"], math.sqrt(2))
+        self.assertEqual(result["bound"], 2.5 * math.sqrt(2))
+        self.assertEqual(result["source"], "single_checkpoint_repeats")
+        zero = rules.measurement_noise_bound([2, 2, 2])
+        self.assertEqual(zero["bound"], 0)
+        self.assertEqual(zero["count"], 3)
+
+    def test_direct_null_differences_do_not_receive_sqrt_two_again(self):
+        result = rules.measurement_noise_bound([100, 200, 300], [-1, 0, 1])
+        self.assertEqual(result["status"], "defined")
+        self.assertEqual(result["source"], "direct_null_paired_differences")
+        self.assertEqual(result["sample_sd"], 1)
+        self.assertEqual(result["paired_difference_sd"], 1)
+        self.assertEqual(result["bound"], 2.5)
+        self.assertEqual(rules.measurement_noise_bound(None, [-1, 0, 1])["bound"], 2.5)
+
+    def test_bad_replicate_count_or_missing_value_never_produces_survivor_sd(self):
+        for values in (None, [], [1, 2], [1, 2, 3, 4]):
+            with self.subTest(values=values):
+                result = rules.measurement_noise_bound(values)
+                self.assertEqual(result["status"], "invalid_replicate_count")
+                self.assertIsNone(result["sample_sd"])
+                self.assertIsNone(result["paired_difference_sd"])
+                self.assertIsNone(result["bound"])
+        for missing in (None, float("nan"), float("inf"), -float("inf"), "unavailable"):
+            for direct in (False, True):
+                with self.subTest(missing=missing, direct=direct):
+                    values = [1, missing, 3]
+                    result = rules.measurement_noise_bound(None, values) if direct else rules.measurement_noise_bound(values)
+                    self.assertEqual(result["status"], "nonfinite_replicate")
+                    self.assertEqual(result["count"], 3)
+                    self.assertIsNone(result["sample_sd"])
+                    self.assertIsNone(result["bound"])
+        direct_missing = rules.measurement_noise_bound([1, 2, 3], [])
+        self.assertEqual(direct_missing["status"], "invalid_replicate_count")
+        self.assertIsNone(direct_missing["bound"])
+        overflowing = rules.measurement_noise_bound([-1e308, 0, 1e308])
+        self.assertEqual(overflowing["status"], "nonfinite_noise_statistic")
+        self.assertIsNone(overflowing["bound"])
+
+    def test_deterministic_process_and_stochastic_retention_are_distinct(self):
+        deterministic = rules.measurement_noise_bound(None, kind="deterministic")
+        self.assertEqual(deterministic["status"], "defined")
+        self.assertEqual(deterministic["bound"], 0)
+        self.assertEqual(deterministic["source"], "registered_deterministic_evaluation")
+        self.assertEqual(deterministic["count"], 0)
+        process = rules.measurement_noise_bound([0, 5, 150], kind="process")
+        self.assertEqual(process["status"], "not_applicable")
+        self.assertIsNone(process["bound"])
+        retention = rules.measurement_noise_bound([1, 1, 1], kind="stochastic_retention")
+        self.assertEqual(retention["status"], "contract_attention_required")
+        self.assertIsNone(retention["sample_sd"])
+        self.assertIsNone(retention["bound"])
+
+    def test_probe_noise_bounds_use_three_complete_trajectory_clock_pairs(self):
+        replicates = [{"t50": value, "tdelta": 2 * value,
+                       "t50_status": "observed", "tdelta_status": "observed", "censor_step": 32}
+                      for value in (1, 2, 3)]
+        result = rules.probe_clock_noise(replicates)
+        self.assertTrue(result["passes"])
+        self.assertEqual(result["count"], 3)
+        self.assertEqual(result["standard_budget"], 32)
+        self.assertEqual(result["bounds"]["t50"], 2.5 * math.sqrt(2))
+        self.assertEqual(result["bounds"]["tdelta"], 5 * math.sqrt(2))
+        self.assertEqual(result["t50"]["sample_sd"], 1)
+        self.assertEqual(result["tdelta"]["sample_sd"], 2)
+        for replicate in replicates:
+            replicate["censor_step"] = 245
+        self.assertTrue(rules.probe_clock_noise(replicates)["passes"])
+
+    def test_any_bad_probe_clock_invalidates_both_noise_bounds(self):
+        complete = [{**observed_clocks(), "censor_step": 32} for _ in range(3)]
+        for clock in ("t50", "tdelta"):
+            for index in range(3):
+                for status in ("undefined_headroom", "right_censored", None):
+                    with self.subTest(clock=clock, index=index, status=status):
+                        replicates = copy.deepcopy(complete)
+                        replicates[index][f"{clock}_status"] = status
+                        result = rules.probe_clock_noise(replicates)
+                        self.assertFalse(result["passes"])
+                        self.assertEqual(result["status"], "candidate_invalid")
+                        self.assertEqual(result["bounds"], {"t50": None, "tdelta": None})
+                        self.assertIsNone(result["t50"]["sample_sd"])
+                        self.assertIsNone(result["tdelta"]["sample_sd"])
+            for value in (None, 0, -1, float("nan"), float("inf"), 33):
+                replicates = copy.deepcopy(complete)
+                replicates[1][clock] = value
+                self.assertFalse(rules.probe_clock_noise(replicates)["passes"])
+
+    def test_probe_replicate_count_and_complete_common_budget_are_required(self):
+        complete = [{**observed_clocks(), "censor_step": 32} for _ in range(3)]
+        for replicates in (None, [], complete[:2], complete + [complete[0]]):
+            result = rules.probe_clock_noise(replicates)
+            self.assertFalse(result["passes"])
+            self.assertEqual(result["bounds"], {"t50": None, "tdelta": None})
+        for budget in (None, 28, 245):
+            replicates = copy.deepcopy(complete)
+            replicates[1]["censor_step"] = budget
+            result = rules.probe_clock_noise(replicates)
+            self.assertFalse(result["passes"])
+            self.assertEqual(result["bounds"], {"t50": None, "tdelta": None})
+        result = rules.probe_clock_noise([complete[0], None, complete[2]])
+        self.assertFalse(result["passes"])
+        self.assertEqual(result["bounds"], {"t50": None, "tdelta": None})
+
+    def test_computed_bound_equality_fails_claim_in_either_direction(self):
+        bound = rules.measurement_noise_bound([1, 2, 3])["bound"]
+        equal_positive = positive_trainability(t50_effect=bound, t50_noise_bound=bound)
+        self.assertFalse(equal_positive["passes"])
+        self.assertFalse(equal_positive["checks"]["t50_above_noise"])
+        above = positive_trainability(t50_effect=math.nextafter(bound, math.inf), t50_noise_bound=bound)
+        self.assertTrue(above["passes"])
+        equal_negative = positive_trainability(
+            t50_effect=-bound, t50_noise_bound=bound, tdelta_effect=-4, relative_t50_effect=-0.12,
+            order_effects={"O1": -1, "O2": -1, "O3": -1, "O4": 1}, task_adjusted_effect=-1)
+        self.assertFalse(equal_negative["passes"])
+        self.assertFalse(equal_negative["checks"]["t50_above_noise"])
+        gap_bound = rules.measurement_noise_bound([0, 0.02, 0.04])["bound"]
+        orders = {"O1": 1, "O2": 1, "O3": 1, "O4": -1}
+        self.assertFalse(rules.diversity_claim(gap_bound, gap_bound, orders, 1)["passes"])
+        self.assertFalse(rules.retention_claim(gap_bound, gap_bound, orders)["passes"])
+
+
 class CoverageAndClaimsTest(unittest.TestCase):
     def test_42_of_56_and_six_of_eight_per_task(self):
         rows = forty_two_cycles()

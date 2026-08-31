@@ -666,6 +666,116 @@ Rows include arm/order/task/cycle/primary_eligible. Claimed probe data have
     }
 
 
+def measurement_noise_bound(values, direct_null_differences=None, *, kind="stochastic_endpoint"):
+    """SPEC §17.0: the operational bound from exactly three complete repeats.
+
+For independent single-checkpoint repeats, paired-difference SD is sqrt(2)
+times sample SD (ddof=1). Direct null differences already measure the paired
+quantity, so their sample SD receives only the 2.5 multiplier. The caller must
+establish independence and the same frozen recipe; equal values are permitted.
+
+Use kind='deterministic' for registered deterministic protected IF, exact task
+gate/held-out metrics, validation NLL, and inherited normalized retention.
+Use 'process' for steps, doses, tokens, and cost: the bound is not applicable.
+Stochastic normalized retention requires kind='stochastic_retention' and a
+prospective propagated bound, never an automatic zero. No kind is inferred
+from observed variation. These are not CIs, p-values, or seed-level inference.
+"""
+    if kind not in {"stochastic_endpoint", "deterministic", "process", "stochastic_retention"}:
+        raise ValueError("unknown registered measurement-noise kind")
+    direct = direct_null_differences is not None
+    supplied = direct_null_differences if direct else values
+    repeats = list(supplied) if supplied is not None else []
+    result = {
+        "status": "defined", "count": len(repeats),
+        "sample_sd": None, "paired_difference_sd": None, "bound": None,
+        "source": "direct_null_paired_differences" if direct else "single_checkpoint_repeats",
+    }
+    if kind == "deterministic":
+        result.update(sample_sd=0.0, paired_difference_sd=0.0, bound=0.0,
+                      source="registered_deterministic_evaluation")
+        return result
+    if kind == "process":
+        result.update(status="not_applicable", source="observed_process_quantity")
+        return result
+    if kind == "stochastic_retention":
+        result.update(status="contract_attention_required", source="unregistered_stochastic_retention")
+        return result
+    if len(repeats) != 3:
+        result["status"] = "invalid_replicate_count"
+        return result
+    try:
+        finite = all(value is not None and math.isfinite(value) for value in repeats)
+    except (TypeError, ValueError, OverflowError):
+        finite = False
+    if not finite:
+        result["status"] = "nonfinite_replicate"
+        return result
+    try:
+        sample_sd = statistics.stdev(repeats)
+    except (OverflowError, statistics.StatisticsError):
+        result["status"] = "nonfinite_noise_statistic"
+        return result
+    paired_sd = sample_sd if direct else math.sqrt(2) * sample_sd
+    bound = 2.5 * paired_sd
+    if not all(math.isfinite(value) for value in (sample_sd, paired_sd, bound)):
+        result["status"] = "nonfinite_noise_statistic"
+        return result
+    result.update(sample_sd=sample_sd, paired_difference_sd=paired_sd, bound=bound)
+    return result
+
+
+def probe_clock_noise(replicates):
+    """SPEC §17.0: all three complete cycle-0 trajectories must supply both clocks.
+
+Inputs are trainability_clocks results from the same candidate/LR, reference,
+displacement, and frozen standard budget. Their 'observed' statuses certify
+first bracketed crossings. The caller establishes those shared settings and
+independent trajectory execution. No surviving-subset SD is calculated if any
+repeat is unavailable, censored, unbracketed, or incomplete.
+"""
+    replicates = list(replicates) if replicates is not None else []
+    failures = []
+    if len(replicates) != 3:
+        failures.append({"reason": "requires_three_complete_trajectories"})
+    budgets = []
+    for index, replicate in enumerate(replicates, 1):
+        if not isinstance(replicate, dict):
+            failures.append({"replicate": index, "reason": "unavailable_trajectory"})
+            continue
+        budget = replicate.get("censor_step")
+        if budget not in {32, 245}:
+            failures.append({"replicate": index, "reason": "incomplete_standard_budget"})
+        else:
+            budgets.append(budget)
+        for clock in ("t50", "tdelta"):
+            value = replicate.get(clock)
+            if (replicate.get(f"{clock}_status") != "observed" or value is None
+                    or not math.isfinite(value) or value <= 0
+                    or (budget in {32, 245} and value > budget)):
+                failures.append({"replicate": index, "clock": clock,
+                                 "reason": "unavailable_or_unbracketed_clock"})
+    if len(set(budgets)) > 1:
+        failures.append({"reason": "inconsistent_standard_budgets"})
+    output = {
+        "status": "candidate_invalid" if failures else "defined",
+        "passes": not failures, "count": len(replicates),
+        "source": "three_complete_cycle0_probe_trajectories",
+        "standard_budget": budgets[0] if len(budgets) == len(replicates) and len(set(budgets)) == 1 else None,
+        "bounds": {"t50": None, "tdelta": None}, "failures": failures,
+    }
+    for clock in ("t50", "tdelta"):
+        if failures:
+            result = {"status": "candidate_invalid", "count": len(replicates),
+                      "sample_sd": None, "paired_difference_sd": None, "bound": None,
+                      "source": "single_checkpoint_repeats"}
+        else:
+            result = measurement_noise_bound([replicate[clock] for replicate in replicates])
+        output[clock] = result
+        output["bounds"][clock] = result["bound"]
+    return output
+
+
 def _direction(value):
     if value is None:
         return None

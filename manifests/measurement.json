@@ -1,11 +1,18 @@
 {
-  "status": "pending_user_noise_bound_definition",
+  "status": "noise_rule_authorized_2026-08-31_before_paid_M1",
   "noise_repeats": 3,
-  "paired_noise_repeats": 3,
   "paired_noise_bound": {
-    "method": null,
-    "note": "SPEC registers M1 noise bounds but does not define their construction. No default claim threshold is authorized."
+    "method": "v1_operational_2_5_sd",
+    "multiplier": 2.5,
+    "single_checkpoint_sd_conversion": "sqrt(2)",
+    "direct_null_difference_sd_conversion": 1.0,
+    "sample_sd_ddof": 1,
+    "all_three_probe_clocks_must_be_defined_and_bracketed": true,
+    "interpretation": "operational measurement guard, not CI, p-value or seed inference"
   },
+  "deterministic_bounds": {"protected_if": 0.0, "task_exact_metrics": 0.0, "validation_nll": 0.0, "normalized_retention": 0.0},
+  "stochastic_retention": "stop and define propagated bound before M2",
+  "process_quantities": "not subject to evaluation-noise bounds",
   "kl": {
     "prompt_selection": "first 32 rows in the frozen repair pool's existing hash-ranked order",
     "prompt_count": 32,

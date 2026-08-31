@@ -655,7 +655,7 @@ and must reach the \(\delta L\) target under the standard budget.
 
 For each probe class:
 
-1. discard every candidate-LR pair failing any headroom or dynamic-coverage rule;
+1. discard every candidate-LR pair failing any headroom, dynamic-coverage, or §17.0 measurement-stability rule;
 2. within each candidate, retain the lowest learning rate that passes;
 3. select the candidate maximizing minimum headroom across the M1 state panel;
 4. ties go to the candidate whose median \(t_{50}\) is closest to half the standard budget;
@@ -864,8 +864,8 @@ Any failure stops the project at M1. No task, threshold, probe, or recipe is imp
 
 Before M2, M1 must also establish:
 
-- cycle-0 noise estimates for stochastic measurements;
-- paired probe-noise bounds;
+- cycle-0 noise estimates for stochastic measurements under §17.0;
+- paired probe-noise bounds and the three-trajectory measurement-stability gate in §17.0;
 - a valid diversity panel;
 - measured task-specific token exposure;
 - measured repair cost;
@@ -969,6 +969,59 @@ A manipulation-coverage failure is itself a design result. It is not repaired by
 ---
 
 # 17. Statistical summaries and claim rules
+
+## 17.0 M1 measurement-noise bounds
+
+Use the v1 operational measurement-noise convention. For each stochastic scalar
+endpoint entering a directional claim, obtain **three independent complete
+repeat measurements**, during M1, under the final frozen recipe.
+
+For a single-checkpoint endpoint \(m\), let \(s_m\) be the sample standard
+deviation across the three repeats (denominator \(n-1\)). The conservative
+noise SD for the difference between independently measured A and B checkpoints
+is \(s_{\Delta m}=\sqrt{2}\,s_m\), and its registered bound is:
+
+\[
+B_m = 2.5\,s_{\Delta m}=2.5\sqrt{2}\,s_m.
+\]
+
+A directional effect must satisfy \(|\Delta m|>B_m\), in addition to its
+separate practical margin and the other registered claim conditions. If direct
+null paired-difference repeats are available, use instead:
+
+\[
+B_m = 2.5\,\operatorname{SD}(\Delta m_{\mathrm{null}}).
+\]
+
+Do not apply the \(\sqrt{2}\) conversion again to direct differences.
+
+Endpoint-specific implementation:
+
+- **Structured and language probe clocks:** for each selected probe/LR/budget,
+  obtain three independent complete cycle-0 probe trajectories. Each of the
+  three trajectories must yield defined, bracketed \(t_{50}\) and \(t_\Delta\).
+  An undefined or censored clock in any repeat fails that candidate-LR pair's
+  M1 measurement-stability gate. Never calculate an SD from surviving repeats.
+- **Diversity sampling-coverage gap:** use three independent complete sampling
+  panel realizations at cycle 0 under the frozen recipe. Other stochastic
+  diversity summaries may have analogous descriptive bounds, but these do not
+  create additional primary claim gates.
+- **Deterministic evaluations:** protected IF pass@1, task held-out exact
+  metrics, and deterministic validation NLL have measurement-noise bound zero
+  under their frozen evaluation. Their practical margins and cross-order
+  consistency requirements remain in force.
+- **Normalized retention:** the bound is zero when inherited task evaluations
+  are deterministic. If a selected task metric is actually stochastic, stop
+  and define its propagated normalized-retention bound before M2; never
+  silently assign zero.
+- **Process quantities:** repair steps, competence dose, damage dose, tokens,
+  and cost are observed process quantities, not endpoints receiving this
+  evaluation-noise bound.
+
+The 2.5 multiplier is an operational measurement-noise guard, **not a 95%
+confidence interval, p-value threshold, or seed-level inference**. Independent
+measurement repeats are not additional experimental lineages and do not alter
+the common task data, example order, or task-specific training/repair schedules.
 
 ## 17.1 Task- and position-adjusted summaries
 
@@ -1196,3 +1249,11 @@ After M2 begins, the interventions, validity rules, primary endpoints, coverage 
   Freeze references before screening. This replaces the earlier “corresponding
   held-out reference” wording; it does not import the probe's twice-budget rule.
   Main-run execution remains prohibited before the separate M2 authorization.
+- **2026-08-31 — M1 measurement-noise bound (user-authorized, before any paid
+  v2 call):** §17.0 freezes three independent complete repeats, the sample-SD
+  bound `2.5 × sqrt(2) × s_m` for single-checkpoint measurements, and `2.5 ×
+  SD(null differences)` when direct null paired repeats are available. It
+  assigns zero noise bounds to the specified deterministic evaluations,
+  excludes process quantities from this noise convention, and requires every
+  clock repeat to be defined and bracketed. §§9.6 and 13.3 now reference that
+  stability gate. No extra uncertainty framework or claim gate is introduced.
