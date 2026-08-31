@@ -12,6 +12,13 @@ freeze. A separate `kintsugi-v2` Tinker project has been created; its operationa
 ID stays local. The current public input-freeze commit is
 `8dc01c8a85ea2d1e6706a76ad4270d30b23438bd`, with 188 passing local tests.
 
+On 2026-08-31, execution stopped during the first acquisition-reference update:
+the sampler-save SDK method rejected the `overwrite` argument. The update's
+journal entry is unfinished, so recovery must establish which update and state
+save completed before continuing; it must not replay the update blindly. This
+is an implementation failure, not a scientific calibration-gate result. The
+README update did not alter or restart the runner.
+
 Initialization first launched under `938fb1f`. Before any sampling, scoring,
 forward pass, or training update, an overlapping diversity-repeat seed range
 was corrected in `138b24d` and re-frozen in `8dc01c8`. The original untrained
