@@ -66,6 +66,37 @@ def validate_measurement_manifest(manifest):
     return manifest
 
 
+def _freeze_identity(root, frozen, current_freeze_sha256):
+    """One explicit implementation-only recovery; scientific inputs stay fixed."""
+    original_commit = frozen.get("resume_from_freeze_commit")
+    if original_commit is None:
+        return {"identity_freeze_sha256": current_freeze_sha256}
+    if original_commit != "8dc01c8a85ea2d1e6706a76ad4270d30b23438bd":
+        raise RuntimeError("implementation resume must name the original authorized input-freeze commit")
+    ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", original_commit, frozen["test_commit"]],
+                              cwd=root, capture_output=True, check=False)
+    if ancestor.returncode:
+        raise RuntimeError("original input-freeze commit must be an ancestor of the tested implementation")
+    recorded = subprocess.run(["git", "show", f"{original_commit}:manifests/freeze.json"],
+                              cwd=root, capture_output=True, check=False)
+    if recorded.returncode:
+        raise RuntimeError("cannot read the original committed input freeze")
+    try:
+        original = json.loads(recorded.stdout)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise RuntimeError("original committed input freeze is invalid") from error
+    if original.get("code_hashes", {}).get("SPEC.md") != frozen["code_hashes"]["SPEC.md"]:
+        raise RuntimeError("implementation resume cannot change the frozen scientific contract")
+    if original.get("manifests") != frozen["manifests"]:
+        raise RuntimeError("implementation resume cannot change the original input manifests")
+    original_test_commit = original.get("test_commit", "")
+    if not isinstance(original_test_commit, str) or re.fullmatch(r"[0-9a-f]{40}", original_test_commit) is None:
+        raise RuntimeError("original input freeze lacks its tested code commit")
+    return {"identity_freeze_sha256": hashlib.sha256(recorded.stdout).hexdigest(),
+            "resume_from_freeze_commit": original_commit,
+            "original_test_commit": original_test_commit}
+
+
 def preflight(root):
     """Read-only local freeze/data/test-commit verification; never connects."""
     root = Path(root).resolve()
@@ -145,8 +176,10 @@ def preflight(root):
         raise RuntimeError("repair-pool file differs from frozen commitment")
     measurement = validate_measurement_manifest(_read(root / "manifests/measurement.json"))
     allowed = M1_RUNNER_COMPLETE and frozen.get("m1_runner_complete") is True
+    current_freeze_sha256 = data.sha256_file(freeze_path)
+    identity = _freeze_identity(root, frozen, current_freeze_sha256)
     return {"status": "ready_for_m1" if allowed else "blocked_incomplete_m1_runner",
-            "paid_launch_allowed": allowed, "freeze_sha256": data.sha256_file(freeze_path),
+            "paid_launch_allowed": allowed, "freeze_sha256": current_freeze_sha256, **identity,
             "test_commit": commit, "measurement": measurement, "m1_complete": False,
             "remaining_m1": REMAINING_M1}
 
@@ -504,12 +537,21 @@ def run(root, *, project_id, keychain_service):
     journal = calibrate.Journal(root / "runs/m1/journal.jsonl")
     if journal.pending:
         raise calibrate.AmbiguousOperation("unresolved M1 operation; no paid call will be retried")
-    identity = {"freeze_sha256": checked["freeze_sha256"],
+    implementation_resume = checked.get("resume_from_freeze_commit") is not None
+    if implementation_resume and not {"m1/identity", "m1/origin"} <= journal.completed.keys():
+        raise RuntimeError("implementation resume requires the existing completed original identity and origin")
+    identity = {"freeze_sha256": checked.get("identity_freeze_sha256", checked["freeze_sha256"]),
                 "project_sha256": hashlib.sha256(project_id.encode()).hexdigest(),
                 "model": MODEL, "lora_seed": LORA_SEED}
     # Freeze identity locally before connecting; changed project/freeze cannot
     # attach to the same execution journal on a later invocation.
     journal.call("m1/identity", identity, lambda: identity)
+    if implementation_resume:
+        revision = {"test_commit": checked["test_commit"], "freeze_sha256": checked["freeze_sha256"],
+                    "identity_freeze_sha256": identity["freeze_sha256"],
+                    "resume_from_freeze_commit": checked["resume_from_freeze_commit"],
+                    "original_test_commit": checked["original_test_commit"]}
+        journal.call(f"m1/implementation/{checked['freeze_sha256']}", revision, lambda: revision)
     previous = journal.completed.get("m1/measurement-closeout")
     if previous:
         data.write_once(root / "runs/m1/launch_packet.json", previous["result"]["launch_packet"])

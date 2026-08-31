@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -249,6 +250,149 @@ class LaunchGateTests(unittest.TestCase):
         self.assertFalse(report["m1_complete"])
         self.assertFalse(report["main_run_authorized"])
         connect.assert_not_called()
+
+
+class ImplementationRevisionTests(unittest.TestCase):
+    def setUp(self):
+        self.original_commit = "8dc01c8a85ea2d1e6706a76ad4270d30b23438bd"
+        self.original = {"test_commit": "a" * 40,
+                         "code_hashes": {"SPEC.md": "same-spec", "backend.py": "old-code"},
+                         "manifests": {"manifests/shared.json": "same-inputs"}}
+        self.original_bytes = (json.dumps(self.original, indent=2) + "\n").encode()
+        self.original_sha = hashlib.sha256(self.original_bytes).hexdigest()
+        self.current = {**copy.deepcopy(self.original), "test_commit": "b" * 40,
+                        "resume_from_freeze_commit": self.original_commit}
+        self.current["code_hashes"]["backend.py"] = "tested-fix"
+        self.checked = {"freeze_sha256": "current-freeze", "identity_freeze_sha256": self.original_sha,
+                        "resume_from_freeze_commit": self.original_commit,
+                        "test_commit": "b" * 40, "original_test_commit": "a" * 40,
+                        "paid_launch_allowed": True, "measurement": measurement_manifest()}
+        self.project_id = "original-project"
+        self.identity = {"freeze_sha256": self.original_sha,
+                         "project_sha256": hashlib.sha256(self.project_id.encode()).hexdigest(),
+                         "model": m1.MODEL, "lora_seed": m1.LORA_SEED}
+
+    def test_unchanged_inputs_keep_exact_original_freeze_bytes_as_identity(self):
+        outputs = [subprocess.CompletedProcess([], 0),
+                   subprocess.CompletedProcess([], 0, stdout=self.original_bytes)]
+        with patch("m1.subprocess.run", side_effect=outputs) as git:
+            result = m1._freeze_identity(Path("."), self.current, "current-freeze")
+        self.assertEqual(result, {"identity_freeze_sha256": self.original_sha,
+                                  "resume_from_freeze_commit": self.original_commit,
+                                  "original_test_commit": "a" * 40})
+        self.assertEqual(git.call_args_list[0].args[0],
+                         ["git", "merge-base", "--is-ancestor", self.original_commit, "b" * 40])
+        self.assertEqual(git.call_args_list[1].args[0],
+                         ["git", "show", self.original_commit + ":manifests/freeze.json"])
+        self.assertNotEqual(self.original_sha, hashlib.sha256(json.dumps(self.original).encode()).hexdigest())
+
+    def test_scientific_contract_and_manifest_changes_are_rejected(self):
+        for changed in ("SPEC.md", "manifests"):
+            current = copy.deepcopy(self.current)
+            if changed == "SPEC.md":
+                current["code_hashes"]["SPEC.md"] = "changed-science"
+            else:
+                current["manifests"]["manifests/shared.json"] = "changed-inputs"
+            outputs = [subprocess.CompletedProcess([], 0),
+                       subprocess.CompletedProcess([], 0, stdout=self.original_bytes)]
+            with self.subTest(changed=changed), patch("m1.subprocess.run", side_effect=outputs):
+                with self.assertRaisesRegex(RuntimeError, "cannot change"):
+                    m1._freeze_identity(Path("."), current, "current-freeze")
+
+    def test_compatibility_is_explicit_and_only_for_the_pinned_ancestor(self):
+        without_resume = copy.deepcopy(self.current)
+        without_resume.pop("resume_from_freeze_commit")
+        with patch("m1.subprocess.run") as git:
+            self.assertEqual(m1._freeze_identity(Path("."), without_resume, "current-freeze"),
+                             {"identity_freeze_sha256": "current-freeze"})
+            git.assert_not_called()
+        with patch("m1.subprocess.run") as git, self.assertRaisesRegex(RuntimeError, "original authorized"):
+            m1._freeze_identity(Path("."), {**self.current, "resume_from_freeze_commit": "c" * 40}, "current-freeze")
+        git.assert_not_called()
+        with patch("m1.subprocess.run", return_value=subprocess.CompletedProcess([], 1)) as git:
+            with self.assertRaisesRegex(RuntimeError, "ancestor"):
+                m1._freeze_identity(Path("."), self.current, "current-freeze")
+            self.assertEqual(git.call_count, 1)
+
+    def test_compatibility_does_not_bypass_current_normal_preflight_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifests/freeze.json"
+            path.parent.mkdir()
+            path.write_text(json.dumps({**self.current, "test_commit": "not-a-full-commit"}))
+            with patch("m1._freeze_identity") as identity, patch("m1.Backend.connect") as connect:
+                with self.assertRaisesRegex(RuntimeError, "full tested code commit"):
+                    m1.preflight(directory)
+                identity.assert_not_called()
+                connect.assert_not_called()
+
+    def test_resume_requires_existing_completed_identity_and_origin(self):
+        for have_identity in (False, True):
+            with self.subTest(have_identity=have_identity), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "runs/m1/journal.jsonl"
+                journal = Journal(path)
+                if have_identity:
+                    journal.call("m1/identity", self.identity, lambda: self.identity)
+                before = path.read_bytes() if path.exists() else b""
+                with patch("m1.preflight", return_value=self.checked), patch("m1.Backend.connect") as connect:
+                    with self.assertRaisesRegex(RuntimeError, "existing completed original identity and origin"):
+                        m1.run(directory, project_id=self.project_id, keychain_service="explicit")
+                    connect.assert_not_called()
+                self.assertEqual(path.read_bytes() if path.exists() else b"", before)
+
+    def test_origin_and_prior_journal_are_reused_revision_is_append_only_and_idempotent(self):
+        origin = checkpoint("completed-original")
+        criterion = {"if_score": 43}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runs/m1/journal.jsonl"
+            journal = Journal(path)
+            journal.call("m1/identity", self.identity, lambda: self.identity)
+            journal.call("m1/origin", self.identity, lambda: origin)
+            journal.call("m1/cycle0/criterion", {"origin": origin}, lambda: criterion)
+            journal.call("m1/if-thresholds", {"criterion": criterion}, lambda: m1.rules.if_thresholds(43))
+            before = path.read_bytes()
+            with patch("m1.preflight", return_value=self.checked), patch("m1.Backend.connect") as connect, \
+                 patch("m1.measure.evaluate_if") as evaluate, \
+                 patch("m1.data.load_rows", return_value=[{}] + [{"prompt": "prompt"}] * 2000), \
+                 patch("m1.data.render_repair_prompt", return_value=[1]), \
+                 patch("m1.screen_tasks", side_effect=RuntimeError("stop before new calibration")) as screen:
+                for _ in range(2):
+                    with self.assertRaisesRegex(RuntimeError, "stop before new calibration"):
+                        m1.run(directory, project_id=self.project_id, keychain_service="explicit")
+                    self.assertEqual(screen.call_args.args[1], origin)
+                    after = path.read_bytes()
+                    self.assertTrue(after.startswith(before))
+                    if screen.call_count == 1:
+                        after_first = after
+                    else:
+                        self.assertEqual(after, after_first)
+                connect.return_value.origin.assert_not_called()
+                connect.return_value.save.assert_not_called()
+                connect.return_value.download_sampler.assert_not_called()
+                evaluate.assert_not_called()
+            resumed = Journal(path)
+            self.assertEqual(len(resumed.rows), 10)  # Four original operations plus one revision.
+            revision = resumed.completed["m1/implementation/current-freeze"]["result"]
+            self.assertEqual(revision, {"test_commit": "b" * 40, "freeze_sha256": "current-freeze",
+                                        "identity_freeze_sha256": self.original_sha,
+                                        "resume_from_freeze_commit": self.original_commit,
+                                        "original_test_commit": "a" * 40})
+
+    def test_project_model_and_seed_identity_changes_still_reject_without_appending(self):
+        for changed in ("project", "model", "seed"):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "runs/m1/journal.jsonl"
+                journal = Journal(path)
+                journal.call("m1/identity", self.identity, lambda: self.identity)
+                journal.call("m1/origin", self.identity, lambda: checkpoint("original"))
+                before = path.read_bytes()
+                with patch("m1.preflight", return_value=self.checked), patch("m1.Backend.connect") as connect, \
+                     patch("m1.MODEL", "different-model" if changed == "model" else self.identity["model"]), \
+                     patch("m1.LORA_SEED", self.identity["lora_seed"] + 1 if changed == "seed" else self.identity["lora_seed"]):
+                    with self.assertRaisesRegex(RuntimeError, "resume contract changed: m1/identity"):
+                        m1.run(directory, project_id="different-project" if changed == "project" else self.project_id,
+                               keychain_service="explicit")
+                    connect.assert_not_called()
+                self.assertEqual(path.read_bytes(), before)
 
 
 class ProbeStageTests(unittest.TestCase):

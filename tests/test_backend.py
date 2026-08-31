@@ -1,7 +1,12 @@
-"""Offline tests: no Tinker import, credentials, live clients or network calls."""
+"""Offline tests: no credentials, live clients or network calls.
+
+The installed-SDK contract test imports TrainingClient only to autospec its
+method signatures; no actual SDK client is constructed or called.
+"""
 
 import asyncio
 import hashlib
+import importlib.metadata
 import io
 import json
 import math
@@ -11,7 +16,7 @@ import tarfile
 import tempfile
 from types import SimpleNamespace as NS
 import unittest
-from unittest.mock import patch
+from unittest.mock import create_autospec, patch
 
 import backend
 
@@ -92,12 +97,12 @@ class Client:
         self.refreshes += 1
         return self.sampler
 
-    def save_state(self, name, **kwargs):
-        self.saves.append(("state", name, kwargs))
+    def save_state(self, name, ttl_seconds=None, overwrite=False):
+        self.saves.append(("state", name, {"ttl_seconds": ttl_seconds, "overwrite": overwrite}))
         return Future(NS(path=f"tinker://run/weights/{name}"))
 
-    def save_weights_for_sampler(self, name, **kwargs):
-        self.saves.append(("sampler", name, kwargs))
+    def save_weights_for_sampler(self, name, ttl_seconds=None):
+        self.saves.append(("sampler", name, {"ttl_seconds": ttl_seconds}))
         return Future(NS(path=f"tinker://run/sampler_weights/{name}"))
 
 
@@ -220,7 +225,8 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(result["state_path"], "tinker://run/weights/m1-T1-reference-lr1-step-000005")
         self.assertIn("/sampler_weights/", result["sampler_path"])
         self.assertEqual([row[0] for row in client.saves], ["state", "sampler"])
-        self.assertTrue(all(row[2] == {"ttl_seconds": 86400} for row in client.saves))
+        self.assertEqual(client.saves[0][2], {"ttl_seconds": 86400, "overwrite": False})
+        self.assertEqual(client.saves[1][2], {"ttl_seconds": 86400})
 
     def test_resume_save_rotates_two_short_lived_slots_then_durable_final(self):
         client, api = Client(), make_backend()
@@ -228,12 +234,61 @@ class BackendTests(unittest.TestCase):
         checkpoints = [api.save(client, "branch", step=step, resume=True) for step in (1, 2, 3)]
         self.assertEqual([row["resume_slot"] for row in checkpoints], [1, 0, 1])
         self.assertEqual(checkpoints[0]["state_path"], checkpoints[2]["state_path"])
-        self.assertEqual([row[2]["overwrite"] for row in client.saves], [False, False, False, False, True, True])
+        state_saves = [row for row in client.saves if row[0] == "state"]
+        sampler_saves = [row for row in client.saves if row[0] == "sampler"]
+        self.assertEqual([row[2]["overwrite"] for row in state_saves], [False, False, True])
+        self.assertTrue(all("overwrite" not in row[2] for row in sampler_saves))
+        self.assertEqual([row[1] for row in sampler_saves],
+                         ["branch-step-000001", "branch-step-000002", "branch-step-000003"])
+        self.assertEqual(len({row["sampler_path"] for row in checkpoints}), 3)
         self.assertTrue(all(row[2]["ttl_seconds"] == 2 * 86400 for row in client.saves))
         final = api.save(client, "branch-A", step=3)
         self.assertIsNone(final["resume_slot"])
         self.assertEqual(final["ttl_seconds"], 90 * 86400)
         self.assertNotIn("overwrite", client.saves[-1][2])
+
+    def test_checkpoint_calls_bind_to_installed_pinned_sdk_signatures(self):
+        try:
+            version = importlib.metadata.version("tinker")
+        except importlib.metadata.PackageNotFoundError:
+            self.skipTest("pinned Tinker SDK is required; run this contract test with .venv/bin/python")
+        self.assertEqual(version, backend.SDK_VERSION)
+        from tinker import TrainingClient
+
+        # Autospec enforces the real SDK signatures, not a permissive **kwargs
+        # double. Returning only local futures keeps this completely offline.
+        client = create_autospec(TrainingClient, instance=True)
+        client.save_state.side_effect = lambda name, ttl_seconds=None, overwrite=False: Future(
+            NS(path=f"tinker://run/weights/{name}"))
+        client.save_weights_for_sampler.side_effect = lambda name, ttl_seconds=None: Future(
+            NS(path=f"tinker://run/sampler_weights/{name}"))
+        with self.assertRaises(TypeError):
+            client.save_weights_for_sampler("not-submitted", overwrite=False)
+        api = make_backend()
+        api.checkpoint_ttl = 90 * 86400
+        resumes = [api.save(client, "branch", step=step, resume=True) for step in (1, 2, 3, 4)]
+        durable_a = api.save(client, "branch-A", step=4)
+        durable_b = api.save(client, "branch-B", step=7)
+
+        states = client.save_state.call_args_list
+        samplers = client.save_weights_for_sampler.call_args_list
+        self.assertEqual([call.args[0] for call in states[:4]],
+                         ["branch-resume-1", "branch-resume-0", "branch-resume-1", "branch-resume-0"])
+        self.assertEqual([call.kwargs["overwrite"] for call in states[:4]], [False, False, True, True])
+        self.assertEqual([call.args[0] for call in samplers],
+                         ["branch-step-000001", "branch-step-000002", "branch-step-000003", "branch-step-000004",
+                          "branch-A-step-000004", "branch-B-step-000007"])
+        self.assertTrue(all(call.kwargs == {"ttl_seconds": 2 * 86400} for call in samplers[:4]))
+        self.assertTrue(all(call.kwargs == {"ttl_seconds": 90 * 86400} for call in samplers[4:]))
+        self.assertTrue(all("overwrite" not in call.kwargs for call in samplers))
+        self.assertEqual(len({row["sampler_path"] for row in resumes}), 4)
+        self.assertEqual(resumes[0]["state_path"], resumes[2]["state_path"])
+        for saved, label in ((durable_a, "branch-A-step-000004"), (durable_b, "branch-B-step-000007")):
+            self.assertEqual(saved["name"], label)
+            self.assertEqual(saved["sampler_name"], label)
+            self.assertEqual(saved["state_path"], f"tinker://run/weights/{label}")
+            self.assertEqual(saved["sampler_path"], f"tinker://run/sampler_weights/{label}")
+            self.assertIsNone(saved["resume_slot"])
 
     def test_sampling_parameters_alignment_and_accounting(self):
         sampler = Sampler()

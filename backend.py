@@ -347,29 +347,34 @@ class Backend:
                 "reverse_kl": sum(divergences) / len(divergences), "accounting": usage}
 
     def save(self, client, name, *, step, resume=False):
-        """Save both kinds: durable step name, or two short-lived resume slots.
+        """Save both kinds, rotating only the optimizer-state resume slots.
 
         Resume slots are only for the same branch, with contiguous steps recorded
-        by the runner. Final A/B checkpoints require a separate durable save.
+        by the runner. Sampler saves do not support overwrite, so their names
+        always identify the step; resume samplers retain the short TTL. Final
+        A/B checkpoints require a separate durable save.
         """
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or type(step) is not int or step < 0:
             raise ValueError("safe checkpoint name and nonnegative step required")
         if resume and step < 1:
             raise ValueError("resume checkpoints require a completed update")
-        label = f"{name}-resume-{step % 2}" if resume else f"{name}-step-{step:06d}"
+        sampler_label = f"{name}-step-{step:06d}"
+        label = f"{name}-resume-{step % 2}" if resume else sampler_label
         ttl = min(self.checkpoint_ttl, 2 * 86400) if resume else self.checkpoint_ttl
         options = {"ttl_seconds": ttl}
         if resume:
             options["overwrite"] = step > 2
         state = client.save_state(label, **options).result()
         state_path = _checkpoint_path(state.path, "weights")
-        sampled = client.save_weights_for_sampler(label, **options).result()
+        sampled = client.save_weights_for_sampler(sampler_label, ttl_seconds=ttl).result()
         sampler_path = _checkpoint_path(sampled.path, "sampler_weights")
         if urlparse(state_path).netloc != urlparse(sampler_path).netloc:
             raise RuntimeError("saved state and sampler belong to different training runs")
-        if any(urlparse(path).path.split("/")[-1] != label for path in (state_path, sampler_path)):
+        if (urlparse(state_path).path.split("/")[-1] != label
+                or urlparse(sampler_path).path.split("/")[-1] != sampler_label):
             raise RuntimeError("saved checkpoint names differ from the requested step")
-        return {"name": label, "step": step, "state_path": state_path, "sampler_path": sampler_path,
+        return {"name": label, "sampler_name": sampler_label, "step": step,
+                "state_path": state_path, "sampler_path": sampler_path,
                 "ttl_seconds": ttl, "resume_slot": step % 2 if resume else None,
                 "accounting": accounting()}
 

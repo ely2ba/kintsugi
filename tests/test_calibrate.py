@@ -91,6 +91,39 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(len(set(backend.updates)), 360)
         self.assertIn(("reference-test-1e-05-state-31", True), backend.branches)
 
+    def test_verified_post_update_save_recovery_does_not_repeat_update(self):
+        class SamplerSaveFailure(FakeBackend):
+            def save(self, client, name, *, step, resume=False):
+                saved = super().save(client, name, step=step, resume=resume)
+                if not hasattr(self, "interrupted_checkpoint"):
+                    self.interrupted_checkpoint = saved
+                    raise TypeError("sampler save rejected overwrite after state saved")
+                return saved
+
+        backend = SamplerSaveFailure()
+        with self.assertRaises(TypeError):
+            reference_sweep(backend, self.origin, self.task, Journal(self.path), backend.evaluate)
+        journal = Journal(self.path)
+        operation = "reference/test/1e-05/update/001"
+        self.assertEqual(set(journal.pending), {operation})
+        self.assertEqual(backend.updates, [(1e-5, 1)])
+        checkpoint = backend.interrupted_checkpoint
+        self.assertEqual(backend.states[checkpoint["state_path"]]["step"], 1)
+        # Mirrors an explicit verified recovery, not automatic handling of an
+        # ambiguous call. Lost training loss stays null; scheduled evals remain.
+        journal._append({"type": "complete", "operation": operation,
+                         "inputs_sha256": journal.pending[operation]["inputs_sha256"],
+                         "elapsed_seconds": None,
+                         "result": {"valid": True, "nll": None, "q": None,
+                                    "optimizer_applied": True,
+                                    "accounting": {"train_tokens": 32, "gradient_target_tokens": 16},
+                                    "checkpoint": checkpoint}})
+        result = reference_sweep(backend, self.origin, self.task, Journal(self.path), backend.evaluate)
+        self.assertEqual(len(backend.updates), 360)
+        self.assertEqual(len(set(backend.updates)), 360)
+        self.assertIn((checkpoint["state_path"], True), backend.branches)
+        self.assertEqual([p["step"] for p in result["trajectories"][0]["points"]], list(REFERENCE_EVAL_STEPS))
+
     def test_short_reference_rejected_before_calls(self):
         backend = FakeBackend()
         task = {**self.task, "reference": self.task["reference"][:-1]}

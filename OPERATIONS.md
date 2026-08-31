@@ -9,15 +9,27 @@ The M0/M1 runner and its deterministic tests are implemented. The author has
 frozen the measurement-noise rule in SPEC §17.0 and
 `manifests/measurement.json`. Execution requires the public tested-code/input
 freeze. A separate `kintsugi-v2` Tinker project has been created; its operational
-ID stays local. The current public input-freeze commit is
+ID stays local. The initial public input-freeze commit is
 `8dc01c8a85ea2d1e6706a76ad4270d30b23438bd`, with 188 passing local tests.
+The current tested implementation is recorded in `manifests/freeze.json`.
 
 On 2026-08-31, execution stopped during the first acquisition-reference update:
-the sampler-save SDK method rejected the `overwrite` argument. The update's
-journal entry is unfinished, so recovery must establish which update and state
-save completed before continuing; it must not replay the update blindly. This
-is an implementation failure, not a scientific calibration-gate result. The
-README update did not alter or restart the runner.
+the sampler-save SDK method rejected the `overwrite` argument after the update
+and optimizer-state save had completed. The original remote update-1 state was
+verified and restored with its Adam moments, then both checkpoint types were
+exported without repeating training. The unfinished journal entry was completed
+append-only; the original cycle-0 checkpoint and measurements were preserved.
+Update 1's training-loss response and active-call duration were not retained and
+are explicitly unavailable. Its token counts were reconstructed from the exact
+frozen batch; no scheduled gate or held-out evaluation was lost.
+
+The fix uses step-unique sampler names, since the pinned SDK supports overwriting
+optimizer states but not sampler exports. Regression tests enforce the installed
+SDK signatures and exercise multiple saves and recovery without repeated updates.
+The implementation revision preserves the original journal identity and records
+the new tested code separately. Preflight requires the original SPEC and all
+input-manifest hashes to remain identical. This is an engineering correction,
+not a scientific-contract change or a calibration-gate result.
 
 Initialization first launched under `938fb1f`. Before any sampling, scoring,
 forward pass, or training update, an overlapping diversity-repeat seed range
@@ -108,9 +120,10 @@ operations are reused on resume. A request with an unknown outcome halts; it is
 not automatically retried. New branches have fresh Adam state. Only recovery of
 the same interrupted branch restores optimizer state.
 
-Two short-lived state/sampler slots protect completed updates. Physical A/B
-checkpoints receive separate durable saves. No-op B checkpoints alias A and
-reuse its measurements; they do not become zero-valued repair observations.
+Two short-lived optimizer-state slots protect completed updates; sampler exports
+use unique step names with the same short expiry. Physical A/B checkpoints receive
+separate durable saves. No-op B checkpoints alias A and reuse its measurements;
+they do not become zero-valued repair observations.
 
 Token accounting separates gradient-bearing targets, full train/forward inputs,
 sampling prefill/cache/completions, and teacher scoring. `compute_logprobs` usage
