@@ -469,7 +469,7 @@ def calibrate_diversity(api, origin, root, journal, measurement):
                 sampler = api.sampler(origin["sampler_path"])
             sampled = api.sample(sampler, [row["prompt_tokens"] for row in examples], samples=8,
                                   max_tokens=recipe["max_tokens"], temperature=recipe["temperature"],
-                                  seed=recipe["seed"] + repeat)
+                                  seed=recipe["seed"] + repeat * len(examples))
             return {**measure.diversity_summary(examples, sampled["groups"]),
                     "accounting": sampled["accounting"]}
 

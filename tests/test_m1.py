@@ -354,7 +354,9 @@ class DiversityStageTests(unittest.TestCase):
              patch("m1.measure.diversity_summary", side_effect=outcomes):
             result = m1.calibrate_diversity(API(), checkpoint("origin"), Path("."), MemoryJournal(), measurement_manifest())
         self.assertEqual(result["selected"]["candidate"], "graph_coloring")
-        self.assertEqual([call[1]["seed"] for call in calls], [100, 101, 102])
+        self.assertEqual([call[1]["seed"] for call in calls], [100, 200, 300])
+        seed_ranges = [set(range(call[1]["seed"], call[1]["seed"] + call[0])) for call in calls]
+        self.assertFalse(seed_ranges[0] & seed_ranges[1] or seed_ranges[0] & seed_ranges[2] or seed_ranges[1] & seed_ranges[2])
         self.assertTrue(all(call[0] == 100 and call[1]["samples"] == 8 for call in calls))
         selected = result["selected"]
         self.assertEqual(selected["qualification"]["qualification_realization"], 0)
@@ -377,7 +379,7 @@ class DiversityStageTests(unittest.TestCase):
              patch("m1.measure.diversity_summary", side_effect=[diversity_result(8), *[diversity_result(2)] * 3]):
             result = m1.calibrate_diversity(API(), checkpoint("origin"), Path("."), MemoryJournal(), measurement_manifest())
         self.assertEqual(result["selected"]["candidate"], "set_partition")
-        self.assertEqual(calls, [100, 100, 101, 102])
+        self.assertEqual(calls, [100, 100, 200, 300])
         self.assertEqual(len(result["attempts"]), 2)
 
     def test_first_panel_length_guard_and_family_coverage(self):

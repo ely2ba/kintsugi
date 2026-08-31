@@ -65,6 +65,9 @@ acquisition prompts are not truncated by that rule. This affects 49 of the
 Diversity candidates qualify on their first frozen sampling realization;
 three independent complete realizations under the selected recipe supply its
 registered noise bound. Their SD is not divided by the square root of three.
+Their per-prompt sampling-seed ranges are disjoint: realization `r` starts at
+the panel seed plus `r × panel_size`. This avoids sharing random streams between
+different prompt positions across repeats; the main-panel seed is unchanged.
 
 ## Reference versus screening
 
