@@ -1,0 +1,11 @@
+{
+  "date": "2026-08-31",
+  "source": "existing v1 origin sampler; no v1 weights imported into the v2 experiment",
+  "operation": "administrative archive download and local validation only",
+  "verified": true,
+  "tensor_file_bytes": 259590376,
+  "rank": 32,
+  "alpha": 32,
+  "expected_adapter_pairs": 248,
+  "v2_origin_validation_still_required": true
+}

@@ -1,0 +1,23 @@
+{
+  "batch_size": 32,
+  "candidate": "graph_path",
+  "class": "structured",
+  "source": {
+    "generator": "probes.py",
+    "generator_sha256": "7401077b7799baff9a8cac887ca3a5018c365baa191bcc482b05d3473da8488f"
+  },
+  "splits": {
+    "train": {
+      "examples": 2048,
+      "path": "data/probes/graph_path/train.jsonl",
+      "sha256": "80730a90e2d37a0a8ddf060dbe591e42c721640204875df462f74674890fc52b"
+    },
+    "val": {
+      "examples": 128,
+      "path": "data/probes/graph_path/val.jsonl",
+      "sha256": "e91a14929465f845a818a449e3a773c5468e4ad39e1a58d63b643e2d4744762f"
+    }
+  },
+  "tokenizer": "Qwen/Qwen3.5-4B",
+  "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
+}

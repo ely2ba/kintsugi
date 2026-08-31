@@ -1,0 +1,77 @@
+{
+  "batch_size": 16,
+  "candidate": "wikipedia_is",
+  "evaluation": {
+    "max_tokens": 512,
+    "samples": 1,
+    "temperature": 0.0
+  },
+  "metric": "negative_nll",
+  "slot": "T2",
+  "source": {
+    "config": "20231101.is",
+    "dataset": "wikimedia/wikipedia",
+    "document_id": "id",
+    "files": [
+      "20231101.is/train-00000-of-00001.parquet"
+    ],
+    "license": "CC-BY-SA-3.0 / GFDL as declared by dataset card",
+    "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+    "split": "train",
+    "text_field": "text",
+    "used_files": [
+      "20231101.is/train-00000-of-00001.parquet"
+    ]
+  },
+  "splits": {
+    "gate": {
+      "examples": 128,
+      "gradient_target_tokens": 50427,
+      "path": "data/wikipedia_is/gate.jsonl",
+      "sha256": "ed3e84c3ebecded23da81010a1c2ed54b311d923adb53c5ee827778a598cefe7"
+    },
+    "heldout": {
+      "examples": 128,
+      "gradient_target_tokens": 58711,
+      "path": "data/wikipedia_is/heldout.jsonl",
+      "sha256": "efc13b566fc97be162b190bfe8055931ab12910e53852cb85b8e8974a1d95390"
+    },
+    "main": {
+      "examples": 1920,
+      "gradient_target_tokens": 828166,
+      "path": "data/wikipedia_is/main.jsonl",
+      "sha256": "f3c94e38a68434bff43753d4bb22233dccfc52bf7f576fb12633b4641f73cdaf"
+    },
+    "persistence": {
+      "examples": 1920,
+      "gradient_target_tokens": 813816,
+      "path": "data/wikipedia_is/persistence.jsonl",
+      "sha256": "5ab8675463124c842c7677930103a4db47ba91ee4fa3996ec025804855cab7c7"
+    },
+    "reference": {
+      "examples": 1920,
+      "gradient_target_tokens": 821784,
+      "path": "data/wikipedia_is/reference.jsonl",
+      "sha256": "24c377789874fee1dfc2bcd2e17dab0532f3c222188fe01d20fc366f9ff59c82"
+    },
+    "screen1": {
+      "examples": 1920,
+      "gradient_target_tokens": 832203,
+      "path": "data/wikipedia_is/screen1.jsonl",
+      "sha256": "f719191df5529af2f16a6b6761287494a332e619d4603b32097b33f19ffb9180"
+    },
+    "screen2": {
+      "examples": 1920,
+      "gradient_target_tokens": 828077,
+      "path": "data/wikipedia_is/screen2.jsonl",
+      "sha256": "c607c4c9dcec7fb14c557a3664ffd3db177d43cfded3587c5243127d26e591f2"
+    }
+  },
+  "tokenizer": "Qwen/Qwen3.5-4B",
+  "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+  "workload": {
+    "max_chunks_per_document": 8,
+    "max_sequence_tokens": 513,
+    "minimum_sequence_tokens": 65
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "if_hashes": {
+    "all": "a51b4a12dab1103d135ac9fad931b3f0dfab3071dcf119067e93d45d6f2728e1",
+    "criterion": "5defb4057d3fbc38ae8317f1704e69a6e735f84bd234e8d17b33aca10919c157",
+    "heldout": "46ffb14c2fec5670ec4342dc3e883cd63b4e69b515b77fbe4bea717967b376c2"
+  },
+  "repair_pool": {
+    "count": 2000,
+    "dataset": "allenai/tulu-3-sft-mixture",
+    "eligible_unique_prompts": 863396,
+    "license": "ODC-BY-1.0 collection; subset source licenses vary",
+    "observed_rows": 939343,
+    "pool_sha256": "5b7fa61b96f0db6ff7163578a11d8a009024da6a28ba13345cc02ce9a0e3012d",
+    "revision": "b14afda60f1bbebe55d5d2fa1e4df5042f97f8be",
+    "seed": 13370001,
+    "selection": "lowest sha256(seed\\0dataset_index\\0id\\0NFC_prompt)",
+    "split": "train",
+    "type": "manifest"
+  },
+  "repair_pool_file_sha256": "9357e2ce6c9587a88c599f541eed13f8a68862a7594b90a97aa2f614d9b224c9"
+}

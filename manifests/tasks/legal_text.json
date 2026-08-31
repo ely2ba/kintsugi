@@ -1,0 +1,77 @@
+{
+  "batch_size": 16,
+  "candidate": "legal_text",
+  "evaluation": {
+    "max_tokens": 512,
+    "samples": 1,
+    "temperature": 0.0
+  },
+  "metric": "negative_nll",
+  "slot": "T7",
+  "source": {
+    "config": "scotus_oral_arguments",
+    "dataset": "pile-of-law/pile-of-law",
+    "document_id": "normalized_text_sha256 (one transcript per row; source URL is collection-wide)",
+    "files": [
+      "data/train.scotus_oral.jsonl.xz"
+    ],
+    "license": "CC-BY-NC-SA-4.0 collection; U.S. Supreme Court oral-argument transcripts",
+    "revision": "2e96169e7e4b43f8ea36230515ebb44b27423b94",
+    "split": "train",
+    "text_field": "text",
+    "used_files": [
+      "data/train.scotus_oral.jsonl.xz"
+    ]
+  },
+  "splits": {
+    "gate": {
+      "examples": 128,
+      "gradient_target_tokens": 65160,
+      "path": "data/legal_text/gate.jsonl",
+      "sha256": "7263a8a24162ad74eec80c2728a70fb06f98272920d83113f471c43ca08add64"
+    },
+    "heldout": {
+      "examples": 128,
+      "gradient_target_tokens": 64773,
+      "path": "data/legal_text/heldout.jsonl",
+      "sha256": "888f2b6ca40c942ae4610661de9fc2d0f5983dca0c7ed6d7331a76d56047bfb6"
+    },
+    "main": {
+      "examples": 1920,
+      "gradient_target_tokens": 979856,
+      "path": "data/legal_text/main.jsonl",
+      "sha256": "17af9ff02d9039d9537433f303003cb4acb50ffc1eb5dd903382e47ed4a49d06"
+    },
+    "persistence": {
+      "examples": 1920,
+      "gradient_target_tokens": 979884,
+      "path": "data/legal_text/persistence.jsonl",
+      "sha256": "1a9f83d94278b3046a41d877bea6f1b0cd9cb18376bb46d0c0d50e2e4ec3fb33"
+    },
+    "reference": {
+      "examples": 1920,
+      "gradient_target_tokens": 980762,
+      "path": "data/legal_text/reference.jsonl",
+      "sha256": "b4ae417b86c5afba7615aa97c4a8e5e7b5a1664e3ee376fd965668f1090cbcfb"
+    },
+    "screen1": {
+      "examples": 1920,
+      "gradient_target_tokens": 980870,
+      "path": "data/legal_text/screen1.jsonl",
+      "sha256": "b2ddcb5999e8726c5bc4d597d146eacea668cfd677e21a4cca60f912476695a7"
+    },
+    "screen2": {
+      "examples": 1920,
+      "gradient_target_tokens": 981294,
+      "path": "data/legal_text/screen2.jsonl",
+      "sha256": "52ad651269608ffe857ab0b7aa233ed993d642d98cd1f86e43a03d40ba1c45c4"
+    }
+  },
+  "tokenizer": "Qwen/Qwen3.5-4B",
+  "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+  "workload": {
+    "max_chunks_per_document": 8,
+    "max_sequence_tokens": 513,
+    "minimum_sequence_tokens": 65
+  }
+}

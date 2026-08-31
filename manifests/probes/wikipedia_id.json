@@ -1,0 +1,36 @@
+{
+  "batch_size": 8,
+  "candidate": "wikipedia_id",
+  "class": "language",
+  "source": {
+    "config": "20231101.id",
+    "dataset": "wikimedia/wikipedia",
+    "document_id": "id",
+    "files": [
+      "20231101.id/train-00000-of-00003.parquet",
+      "20231101.id/train-00001-of-00003.parquet",
+      "20231101.id/train-00002-of-00003.parquet"
+    ],
+    "license": "CC-BY-SA-3.0 / GFDL as declared by dataset card",
+    "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+    "split": "train",
+    "text_field": "text",
+    "used_files": [
+      "20231101.id/train-00000-of-00003.parquet"
+    ]
+  },
+  "splits": {
+    "train": {
+      "examples": 3920,
+      "path": "data/probes/wikipedia_id/train.jsonl",
+      "sha256": "d49e412b473854ec7e9853af1ce9d60da6473fb744dea1c495c09adc06648ca5"
+    },
+    "val": {
+      "examples": 128,
+      "path": "data/probes/wikipedia_id/val.jsonl",
+      "sha256": "a0221b6d1932e9a3536a2a84c8a866d9a842db63e4e2f88808a5e7c2db627baf"
+    }
+  },
+  "tokenizer": "Qwen/Qwen3.5-4B",
+  "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
+}

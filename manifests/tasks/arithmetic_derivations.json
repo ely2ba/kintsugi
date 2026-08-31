@@ -1,0 +1,68 @@
+{
+  "batch_size": 64,
+  "candidate": "arithmetic_derivations",
+  "evaluation": {
+    "max_tokens": 512,
+    "samples": 1,
+    "temperature": 0.0
+  },
+  "metric": "verifier_success",
+  "slot": "T1",
+  "source": {
+    "generator": "tasks.py",
+    "generator_sha256": "8809c652f77d1e597cbe7f4924a90b9ffbff5a30c3d7deb7a6c3d382469f234b",
+    "instance_indices": "unscored specimens 0..127; disjoint data starts at 1024"
+  },
+  "splits": {
+    "gate": {
+      "examples": 128,
+      "gradient_target_tokens": 7620,
+      "path": "data/arithmetic_derivations/gate.jsonl",
+      "sha256": "a06bca42b2092d4943ec0b6c7e1c4b010fa54b092eb584103c18ab46a2a507f7"
+    },
+    "heldout": {
+      "examples": 128,
+      "gradient_target_tokens": 7583,
+      "path": "data/arithmetic_derivations/heldout.jsonl",
+      "sha256": "ef422851a368cb5bd820fa281cf3f40308898671ae2520e867bbe7fcd045e092"
+    },
+    "main": {
+      "examples": 7680,
+      "gradient_target_tokens": 456424,
+      "path": "data/arithmetic_derivations/main.jsonl",
+      "sha256": "cd7b45bf57021ade5d55d4411b3898fc1d2cd2946547e5e0678a95a6a7e2209f"
+    },
+    "persistence": {
+      "examples": 7680,
+      "gradient_target_tokens": 456389,
+      "path": "data/arithmetic_derivations/persistence.jsonl",
+      "sha256": "b95637248e80688c36aef442d495eef7f0708142971d2a82cd0d30c531271b43"
+    },
+    "reference": {
+      "examples": 7680,
+      "gradient_target_tokens": 456396,
+      "path": "data/arithmetic_derivations/reference.jsonl",
+      "sha256": "404899f3a942b75380f8ea23ed0fa640b1a524a2c26783a3d2e6f76f997d4353"
+    },
+    "screen1": {
+      "examples": 7680,
+      "gradient_target_tokens": 456466,
+      "path": "data/arithmetic_derivations/screen1.jsonl",
+      "sha256": "4b1efd5b17d85130e8c91b6d4a39cefd4dcca547a84b116e6fad9cb34cd6725e"
+    },
+    "screen2": {
+      "examples": 7680,
+      "gradient_target_tokens": 456418,
+      "path": "data/arithmetic_derivations/screen2.jsonl",
+      "sha256": "e359e4325ba8083c8181b879e38bc4f432f3cd23e17aeac05e5ba2c17034de10"
+    }
+  },
+  "tokenizer": "Qwen/Qwen3.5-4B",
+  "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+  "workload": {
+    "mean_target_tokens": 59.4765625,
+    "p95_total_tokens": 163,
+    "rule": "64 if p95_total<=512 and mean_target<=128; else 32 if <=1024 and <=256; else 16",
+    "specimens": 128
+  }
+}

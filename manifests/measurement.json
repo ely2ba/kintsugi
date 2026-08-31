@@ -1,0 +1,17 @@
+{
+  "status": "pending_user_noise_bound_definition",
+  "noise_repeats": 3,
+  "paired_noise_repeats": 3,
+  "paired_noise_bound": {
+    "method": null,
+    "note": "SPEC registers M1 noise bounds but does not define their construction. No default claim threshold is authorized."
+  },
+  "kl": {
+    "prompt_selection": "first 32 rows in the frozen repair pool's existing hash-ranked order",
+    "prompt_count": 32,
+    "samples": 1,
+    "max_tokens": 512,
+    "temperature": 1.0,
+    "seed": 20260831
+  }
+}

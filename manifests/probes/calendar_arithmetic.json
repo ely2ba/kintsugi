@@ -1,0 +1,23 @@
+{
+  "batch_size": 32,
+  "candidate": "calendar_arithmetic",
+  "class": "structured",
+  "source": {
+    "generator": "probes.py",
+    "generator_sha256": "7401077b7799baff9a8cac887ca3a5018c365baa191bcc482b05d3473da8488f"
+  },
+  "splits": {
+    "train": {
+      "examples": 2048,
+      "path": "data/probes/calendar_arithmetic/train.jsonl",
+      "sha256": "9a34ace2bfc4b8f3a62cb296d083496dccac6bfabc5d841601bfc1dbbdfe0d12"
+    },
+    "val": {
+      "examples": 128,
+      "path": "data/probes/calendar_arithmetic/val.jsonl",
+      "sha256": "8e010f9c67bba0737203078fa33533fe7da44c9ff61b680851ca80506951cf3e"
+    }
+  },
+  "tokenizer": "Qwen/Qwen3.5-4B",
+  "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
+}

@@ -1,0 +1,36 @@
+{
+  "batch_size": 8,
+  "candidate": "wikipedia_fi",
+  "class": "language",
+  "source": {
+    "config": "20231101.fi",
+    "dataset": "wikimedia/wikipedia",
+    "document_id": "id",
+    "files": [
+      "20231101.fi/train-00000-of-00003.parquet",
+      "20231101.fi/train-00001-of-00003.parquet",
+      "20231101.fi/train-00002-of-00003.parquet"
+    ],
+    "license": "CC-BY-SA-3.0 / GFDL as declared by dataset card",
+    "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+    "split": "train",
+    "text_field": "text",
+    "used_files": [
+      "20231101.fi/train-00000-of-00003.parquet"
+    ]
+  },
+  "splits": {
+    "train": {
+      "examples": 3920,
+      "path": "data/probes/wikipedia_fi/train.jsonl",
+      "sha256": "5ddc768ed2a7435174212d8a81b44831da4f1eb8ffb8c1b6c35978ebf75dcac9"
+    },
+    "val": {
+      "examples": 128,
+      "path": "data/probes/wikipedia_fi/val.jsonl",
+      "sha256": "70156f6664fd07d68983b0e08d91c5d934dd117864a422e3260bad68fe74e069"
+    }
+  },
+  "tokenizer": "Qwen/Qwen3.5-4B",
+  "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
+}

@@ -1,0 +1,77 @@
+{
+  "batch_size": 16,
+  "candidate": "biomedical_abstracts",
+  "evaluation": {
+    "max_tokens": 512,
+    "samples": 1,
+    "temperature": 0.0
+  },
+  "metric": "negative_nll",
+  "slot": "T7",
+  "source": {
+    "config": "pqa_unlabeled",
+    "dataset": "qiaojin/PubMedQA",
+    "document_id": "pubid",
+    "files": [
+      "pqa_unlabeled/train-00000-of-00001.parquet"
+    ],
+    "license": "MIT dataset; underlying abstract rights remain with their publishers",
+    "revision": "9001f2853fb87cab8d220904e0de81ac6973b318",
+    "split": "train",
+    "text_field": "context.contexts + long_answer (abstract conclusion); no questions or labels",
+    "used_files": [
+      "pqa_unlabeled/train-00000-of-00001.parquet"
+    ]
+  },
+  "splits": {
+    "gate": {
+      "examples": 128,
+      "gradient_target_tokens": 46003,
+      "path": "data/biomedical_abstracts/gate.jsonl",
+      "sha256": "898779de002dfab106d176ae10a488deedeaf87c2ba38c0d18ef9e2c167ad20f"
+    },
+    "heldout": {
+      "examples": 128,
+      "gradient_target_tokens": 44749,
+      "path": "data/biomedical_abstracts/heldout.jsonl",
+      "sha256": "c8766dd77453aa23763a10dab57d0396d85705c13b7122b1a23379ef98082c5d"
+    },
+    "main": {
+      "examples": 1920,
+      "gradient_target_tokens": 666641,
+      "path": "data/biomedical_abstracts/main.jsonl",
+      "sha256": "e7801146aaf06343c3b2be248b73b05749302d384f27ea23b301bc7d1dccab17"
+    },
+    "persistence": {
+      "examples": 1920,
+      "gradient_target_tokens": 679960,
+      "path": "data/biomedical_abstracts/persistence.jsonl",
+      "sha256": "bf56575338a974ed38c54685b7fb8ace588af20217d4a0905924bc427cb34e82"
+    },
+    "reference": {
+      "examples": 1920,
+      "gradient_target_tokens": 673535,
+      "path": "data/biomedical_abstracts/reference.jsonl",
+      "sha256": "bb7ed9866f8ec70ed0d1d4fef6eb0ae738a6a5ffa70102427a0416917140b40d"
+    },
+    "screen1": {
+      "examples": 1920,
+      "gradient_target_tokens": 678407,
+      "path": "data/biomedical_abstracts/screen1.jsonl",
+      "sha256": "ebd35f1b274d7ca6eb6f12d9136f06f5c2d0880849e5d871762dcd5a83f85cfc"
+    },
+    "screen2": {
+      "examples": 1920,
+      "gradient_target_tokens": 676275,
+      "path": "data/biomedical_abstracts/screen2.jsonl",
+      "sha256": "4b5d0a94533e5910c4e5e041facf00246905e0e85e62991be10fd8176d0f33de"
+    }
+  },
+  "tokenizer": "Qwen/Qwen3.5-4B",
+  "tokenizer_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+  "workload": {
+    "max_chunks_per_document": 8,
+    "max_sequence_tokens": 513,
+    "minimum_sequence_tokens": 65
+  }
+}

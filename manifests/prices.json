@@ -1,0 +1,11 @@
+{
+  "verified_on": "2026-08-31",
+  "source": "https://tinker-docs.thinkingmachines.ai/tinker/models.json",
+  "model": "Qwen/Qwen3.5-4B",
+  "unit": "USD per 1000000 tokens",
+  "prefill": 0.33,
+  "cached_prefill": 0.066,
+  "sample": 1.005,
+  "train_and_forward": 0.737,
+  "billing_reconciliation": "not applicable yet: no paid v2 calls"
+}

@@ -1,0 +1,99 @@
+{
+  "cycles": [
+    {
+      "cycle": 1,
+      "repair_schedule_key": "T7",
+      "slot": "T7",
+      "task_candidates": [
+        "legal_text",
+        "biomedical_abstracts"
+      ],
+      "task_schedule_key": "T7"
+    },
+    {
+      "cycle": 2,
+      "repair_schedule_key": "T6",
+      "slot": "T6",
+      "task_candidates": [
+        "string_programs",
+        "finite_state_rewrite"
+      ],
+      "task_schedule_key": "T6"
+    },
+    {
+      "cycle": 3,
+      "repair_schedule_key": "T2",
+      "slot": "T2",
+      "task_candidates": [
+        "wikipedia_is",
+        "wikipedia_eu"
+      ],
+      "task_schedule_key": "T2"
+    },
+    {
+      "cycle": 4,
+      "repair_schedule_key": "T5",
+      "slot": "T5",
+      "task_candidates": [
+        "base_conversion",
+        "modular_numerals"
+      ],
+      "task_schedule_key": "T5"
+    },
+    {
+      "cycle": 5,
+      "repair_schedule_key": "T4",
+      "slot": "T4",
+      "task_candidates": [
+        "json_extraction",
+        "xml_extraction"
+      ],
+      "task_schedule_key": "T4"
+    },
+    {
+      "cycle": 6,
+      "repair_schedule_key": "T3",
+      "slot": "T3",
+      "task_candidates": [
+        "nl_sql",
+        "spreadsheet_formulas"
+      ],
+      "task_schedule_key": "T3"
+    },
+    {
+      "cycle": 7,
+      "repair_schedule_key": "T1",
+      "slot": "T1",
+      "task_candidates": [
+        "arithmetic_derivations",
+        "equation_derivations"
+      ],
+      "task_schedule_key": "T1"
+    }
+  ],
+  "lineages": [
+    {
+      "arm": "learn-only",
+      "id": "learn-only-O4"
+    },
+    {
+      "arm": "fixed",
+      "id": "fixed-O4"
+    },
+    {
+      "arm": "rolling",
+      "id": "rolling-O4"
+    }
+  ],
+  "order": "O4",
+  "randomness": "task-keyed shared data, example order, evaluation and repair schedule",
+  "slots": [
+    "T7",
+    "T6",
+    "T2",
+    "T5",
+    "T4",
+    "T3",
+    "T1"
+  ]
+}

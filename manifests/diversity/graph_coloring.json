@@ -1,0 +1,21 @@
+{
+  "candidate": "graph_coloring",
+  "examples": 100,
+  "family_coverage": 1.0,
+  "family_definition": "unlabeled vertex partitions / unordered equal-sum partitions; not latent reasoning",
+  "generator": "probes.py",
+  "generator_sha256": "7401077b7799baff9a8cac887ca3a5018c365baa191bcc482b05d3473da8488f",
+  "path": "data/diversity/graph_coloring.jsonl",
+  "safe_length_rule": {
+    "max_truncation_rate": 0.0,
+    "p95_tokens_at_most": 384
+  },
+  "sampling": {
+    "max_tokens": 512,
+    "samples": 8,
+    "seed": 20260831,
+    "temperature": 1.0
+  },
+  "selection": "first qualifying candidate in graph_coloring, set_partition order; no post-outcome tuning",
+  "sha256": "d2c17b51b40451aae7247b526a41a26bca40d2e1da430b0d57f58b3106171975"
+}

@@ -1,0 +1,94 @@
+{
+  "biomedical_abstracts": {
+    "config": "pqa_unlabeled",
+    "dataset": "qiaojin/PubMedQA",
+    "document_id": "pubid",
+    "files": [
+      "pqa_unlabeled/train-00000-of-00001.parquet"
+    ],
+    "license": "MIT dataset; underlying abstract rights remain with their publishers",
+    "revision": "9001f2853fb87cab8d220904e0de81ac6973b318",
+    "split": "train",
+    "text_field": "context.contexts + long_answer (abstract conclusion); no questions or labels"
+  },
+  "legal_text": {
+    "config": "scotus_oral_arguments",
+    "dataset": "pile-of-law/pile-of-law",
+    "document_id": "normalized_text_sha256 (one transcript per row; source URL is collection-wide)",
+    "files": [
+      "data/train.scotus_oral.jsonl.xz"
+    ],
+    "license": "CC-BY-NC-SA-4.0 collection; U.S. Supreme Court oral-argument transcripts",
+    "revision": "2e96169e7e4b43f8ea36230515ebb44b27423b94",
+    "split": "train",
+    "text_field": "text"
+  },
+  "wikipedia_eu": {
+    "config": "20231101.eu",
+    "dataset": "wikimedia/wikipedia",
+    "document_id": "id",
+    "files": [
+      "20231101.eu/train-00000-of-00002.parquet",
+      "20231101.eu/train-00001-of-00002.parquet"
+    ],
+    "license": "CC-BY-SA-3.0 / GFDL as declared by dataset card",
+    "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+    "split": "train",
+    "text_field": "text"
+  },
+  "wikipedia_fi": {
+    "config": "20231101.fi",
+    "dataset": "wikimedia/wikipedia",
+    "document_id": "id",
+    "files": [
+      "20231101.fi/train-00000-of-00003.parquet",
+      "20231101.fi/train-00001-of-00003.parquet",
+      "20231101.fi/train-00002-of-00003.parquet"
+    ],
+    "license": "CC-BY-SA-3.0 / GFDL as declared by dataset card",
+    "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+    "split": "train",
+    "text_field": "text"
+  },
+  "wikipedia_id": {
+    "config": "20231101.id",
+    "dataset": "wikimedia/wikipedia",
+    "document_id": "id",
+    "files": [
+      "20231101.id/train-00000-of-00003.parquet",
+      "20231101.id/train-00001-of-00003.parquet",
+      "20231101.id/train-00002-of-00003.parquet"
+    ],
+    "license": "CC-BY-SA-3.0 / GFDL as declared by dataset card",
+    "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+    "split": "train",
+    "text_field": "text"
+  },
+  "wikipedia_is": {
+    "config": "20231101.is",
+    "dataset": "wikimedia/wikipedia",
+    "document_id": "id",
+    "files": [
+      "20231101.is/train-00000-of-00001.parquet"
+    ],
+    "license": "CC-BY-SA-3.0 / GFDL as declared by dataset card",
+    "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+    "split": "train",
+    "text_field": "text"
+  },
+  "wikipedia_vi": {
+    "config": "20231101.vi",
+    "dataset": "wikimedia/wikipedia",
+    "document_id": "id",
+    "files": [
+      "20231101.vi/train-00000-of-00004.parquet",
+      "20231101.vi/train-00001-of-00004.parquet",
+      "20231101.vi/train-00002-of-00004.parquet",
+      "20231101.vi/train-00003-of-00004.parquet"
+    ],
+    "license": "CC-BY-SA-3.0 / GFDL as declared by dataset card",
+    "revision": "b04c8d1ceb2f5cd4588862100d08de323dccfbaa",
+    "split": "train",
+    "text_field": "text"
+  }
+}
