@@ -243,9 +243,31 @@ Q=
 For task \(j\), M1 produces:
 
 - \(Q^{g}_{j,0}\): cycle-0 gate score;
-- \(Q^{g}_{j,\mathrm{ref}}\): best registered gate score in the extended reference sweep;
+- \(Q^{g}_{j,\mathrm{ref}}\): best oriented gate score over valid registered learning-rate × checkpoint points in the 120-update reference sweep;
 - \(Q^{h}_{j,0}\): cycle-0 held-out score;
-- \(Q^{h}_{j,\mathrm{ref}}\): corresponding held-out reference score.
+- \(Q^{h}_{j,\mathrm{ref}}\): independently best oriented held-out score over those valid registered learning-rate × checkpoint points.
+
+### 5.1 Acquisition-task reference sweep
+
+For each candidate acquisition task, the cycle-0 reference uses the main learning
+phase's maximum exposure: **120 updates**, not the probe convention of twice the
+budget. On the task's disjoint reference-calibration split, each registered
+learning rate `{1e-5, 3e-5, 1e-4}` runs independently from the common cycle-0
+checkpoint for 120 updates, with the already-fixed task batch size, a fresh Adam
+optimizer, and ten-update warmup.
+
+Evaluate both gate and held-out task metrics at update 0 and every five updates
+through 120. `Q^g_ref` and `Q^h_ref` are their independently best oriented scores
+over all valid registered LR × checkpoint points; they need not occur at the same
+checkpoint. `Q^g_0` and `Q^h_0` are the corresponding cycle-0 scores before
+training. No interpolation, extrapolation, smoothing, or early stopping is used.
+Protected IF does not control or truncate this reference sweep: it defines
+within-budget attainable task competence only.
+
+A numerically invalid or diverged LR trajectory contributes no later points. If
+no LR produces a valid reference trajectory, the candidate fails screening.
+Reference values are frozen before the two realization-screening runs and used
+in the competence/headroom formulas below without alteration.
 
 The gate competence threshold is:
 
@@ -310,6 +332,11 @@ This prevents a task that has already been largely acquired through transfer fro
 # 6. Learning intervention
 
 ## 6.1 Recipe calibration
+
+Complete and freeze the acquisition-task reference sweep in §5.1 before the two
+screening realizations. Its 120-update budget, five-update evaluation cadence,
+fresh Adam state, and ten-update warmup are fixed; neither protected IF damage
+nor early competence truncates it.
 
 For each task candidate, M1 evaluates a predeclared learning-rate grid:
 
@@ -1157,3 +1184,15 @@ M1 may fill in only the quantities explicitly defined as calibration outputs:
 Those values are frozen before M2.
 
 After M2 begins, the interventions, validity rules, primary endpoints, coverage requirements, practical margins, and claim rules do not change in response to outcomes. Any unavoidable deviation is reported as a deviation rather than rewritten as part of the original design.
+
+## 22.1 Dated amendments
+
+- **2026-08-31 — acquisition reference-sweep definition (user-authorized, before
+  any paid v2 call):** §§5–6 now define 120 updates per registered LR, fixed task
+  batch size, fresh Adam and ten-update warmup; gate and held-out evaluation at
+  0,5,…,120; independently best valid gate and held-out reference scores; no
+  interpolation, smoothing, extrapolation, or outcome-driven early stopping; no
+  truncation by protected IF; invalid trajectories contribute no later points.
+  Freeze references before screening. This replaces the earlier “corresponding
+  held-out reference” wording; it does not import the probe's twice-budget rule.
+  Main-run execution remains prohibited before the separate M2 authorization.
