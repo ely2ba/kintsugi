@@ -1,9 +1,9 @@
 {
   "code_hashes": {
     "SPEC.md": "9426de010a3e9e11fbc6733d90257c6518ad92299b54c1e591cfbed935572e1e",
-    "backend.py": "0a2a49c7ed447caf2fc468bb1c29e9b6e5a775f2ba7cf3a18d9786503ee28e4a",
-    "calibrate.py": "57ed7b8076c8d7622c95dbcf02a2b9fcdad3088f7e6a012d8634ba5f833f016a",
-    "closeout.py": "a7f2797639583f1b134971b3f9e996e807550080f3eab80a1b5317d7ab84b4a1",
+    "backend.py": "a17cada27966150c3d3fff73362a4dedbfd2fe2ff4c72909783837ba992728ac",
+    "calibrate.py": "573a76eed16c590eb60f7432136aedbc838c436f7375f56c50e1902712358169",
+    "closeout.py": "1d78db84de790dbca572ad5dd626c950e92e611cdebfc22277ed5a0daaf88764",
     "costs.py": "2ef58828b0684c47dd23338836f923039b7dba126b6c4a9530bf4594806e77bc",
     "data.py": "c1eab282eb5625e38e42c675f0407b6104ec3fa5d6a6adf0d3a5528a5825cc5b",
     "eval_cache.py": "cafd2c4cc2c79d834215b86d78db29df414520e3c5857311efb4078ab26b9f11",
@@ -15,8 +15,8 @@
     "requirements.txt": "2098997a53e03d5e889348c97c71addf005f80cfaddb588716f53ca885311f89",
     "rules.py": "7f684091c67d431678170c9b347d1907381d99ed61078c60586dc31bca07a351",
     "tasks.py": "8809c652f77d1e597cbe7f4924a90b9ffbff5a30c3d7deb7a6c3d382469f234b",
-    "tests/test_backend.py": "d0d08f902a1935731ffd4c423b5d3bb05f84c640ecd0e61988622f80a94718c6",
-    "tests/test_calibrate.py": "37196bd73f1f06cf2f0017763c3d8c44fb34908ed22a5b30276347eb43250de4",
+    "tests/test_backend.py": "67e95b54d20d2266f1feda251d1c8bec9ba418da41d601ad1b1079046d1d2f0f",
+    "tests/test_calibrate.py": "0657bcd0f76b84370de97b5d1d55a2a68b53ff639434890772759c1e5e231a84",
     "tests/test_closeout.py": "9055829fb3d6da3472100903e533c15814790dca09d6e4d3efe07632bfe2a596",
     "tests/test_closeout_costs.py": "d4e41a911bdea30eb8e00666f7ad4b5a1ea5b7c5fd5490072df0371ba09ccd6e",
     "tests/test_costs.py": "ac21e3b59b82b389d3d2c18de24c6602abdaccff767321c381c4855122ca270c",
@@ -67,7 +67,7 @@
   },
   "resume_from_freeze_commit": "8dc01c8a85ea2d1e6706a76ad4270d30b23438bd",
   "revision_note": "User-authorized execution-only wall-time reduction: optimizer state is saved without unused sampler exports during probes and between registered acquisition-reference evaluations; paired full checkpoint requests overlap without an intervening update; independent physical-state probe trajectories use two fail-closed workers with deterministic child journals and main-journal accounting imports. No probe trajectory existed before this revision. Frozen data, seeds, model, learning rates, update budgets, evaluation cadence, metrics, gates, and selection rules are unchanged.",
-  "test_commit": "50fbed4d6971470e50fd25192ff2e5ef6a4891a5",
+  "test_commit": "6e7b7dcd1b966c187f98923218434d40a55bb261",
   "tested_on": "2026-09-01",
   "tests_passed": 238
 }
