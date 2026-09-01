@@ -34,6 +34,7 @@ from protocol import TOKENIZER_REVISION
 MODEL = "Qwen/Qwen3.5-4B"
 RANK = ALPHA = 32
 SDK_VERSION = "0.25.0"
+SCORING_WINDOW = 32
 # Rejection guards only. These projects must never receive v2 work.
 HISTORICAL_PROJECT_HASHES = frozenset({
     "2dfe3c1d0aa4a06b76bd01b4fd95def6b831705e7bdce6af402c1e11eee91e90",
@@ -322,16 +323,22 @@ class Backend:
             raise ValueError("scorer prompt/group alignment failed")
         trajectories = [(index, prompt, _tokens(sample["tokens"]))
                         for index, (prompt, group) in enumerate(zip(prompts, groups)) for sample in group]
-        futures = [sampler.compute_logprobs(self.sdk.ModelInput.from_ints(prompt + tokens))
-                   for _, prompt, tokens in trajectories]
         scored, usage = [[] for _ in prompts], accounting()
-        for (index, prompt, tokens), future in zip(trajectories, futures):
-            values = future.result()
-            if len(values) != len(prompt) + len(tokens):
-                raise RuntimeError("scorer full-trajectory alignment failed")
-            scored[index].append(_finite(values[len(prompt):], "scorer completion logprob"))
-            usage["scoring_prefill_tokens"] += len(prompt) + len(tokens)
-            usage["scoring_discarded_sample_tokens_estimate"] += 1
+        # A repair batch has 256 trajectories. Submitting every request at once
+        # can exhaust the host's file-descriptor limit before any result is read.
+        # Windowing changes only transport scheduling; trajectory order, model
+        # inputs, and deterministic logprob results remain identical.
+        for offset in range(0, len(trajectories), SCORING_WINDOW):
+            window = trajectories[offset:offset + SCORING_WINDOW]
+            futures = [sampler.compute_logprobs(self.sdk.ModelInput.from_ints(prompt + tokens))
+                       for _, prompt, tokens in window]
+            for (index, prompt, tokens), future in zip(window, futures):
+                values = future.result()
+                if len(values) != len(prompt) + len(tokens):
+                    raise RuntimeError("scorer full-trajectory alignment failed")
+                scored[index].append(_finite(values[len(prompt):], "scorer completion logprob"))
+                usage["scoring_prefill_tokens"] += len(prompt) + len(tokens)
+                usage["scoring_discarded_sample_tokens_estimate"] += 1
         return {"logprobs": scored, "accounting": usage}
 
     def repair_step(self, client, teacher, prompt_tokens, *, step, seed):

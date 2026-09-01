@@ -438,6 +438,33 @@ class JournalTests(unittest.TestCase):
                 with self.assertRaises(AmbiguousOperation):
                     Journal(path)
 
+    def test_verified_teacher_scoring_failure_resumes_before_mutation(self):
+        operation, inputs = "screen/task/0.0001/1/repair/update/006", {"step": 6, "from": "state-5"}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.jsonl"
+            journal = Journal(path)
+            digest = hashlib.sha256(canonical(inputs).encode()).hexdigest()
+            journal._record({"type": "inflight", "operation": operation, "inputs_sha256": digest})
+            journal._record({"type": "failed", "operation": operation, "inputs_sha256": digest,
+                             "attempt": 1, "attempt_status": "failed", "elapsed_seconds": 2.0,
+                             "retryable": False, "error_type": "APIConnectionError"})
+            evidence = {"traceback_boundary": "Backend.score"}
+            journal._record({
+                "type": "premutation_recovery_authorized", "operation": operation,
+                "inputs_sha256": digest, "recoverable": True, "failed_attempt": 1,
+                "failed_error_type": "APIConnectionError", "failure_boundary": "teacher_scoring",
+                "forward_backward_applied": False, "optimizer_applied": False,
+                "training_updates_replayed": False, "source_checkpoint": "tinker://run/weights/state-5",
+                "remote_training_runs_created": [], "evidence": evidence,
+                "evidence_sha256": hashlib.sha256(canonical(evidence).encode()).hexdigest(),
+                "reason": "Traceback and remote request time prove failure preceded mutable work.",
+            })
+            resumed = Journal(path)
+            self.assertTrue(resumed.premutation_recoverable_pending())
+            self.assertFalse(resumed.setup_recoverable_pending())
+            self.assertEqual(resumed.call(operation, inputs, lambda: {"step": 6})["step"], 6)
+            self.assertEqual(Journal(path).completed[operation]["attempt"], 2)
+
     def test_marked_hard_interruption_can_resume_but_prior_duration_is_unknown(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "journal.jsonl"

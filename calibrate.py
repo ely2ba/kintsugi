@@ -76,7 +76,7 @@ class Journal:
             self.pending[key] = row
             self.attempts[key] = {"attempt": 1, "active": True, "elapsed_seconds": 0.0,
                                   "timing_complete": True, "recoverable": row.get("recoverable", False),
-                                  "authorized": False, "setup_only": False,
+                                  "authorized": False, "setup_only": False, "premutation_only": False,
                                   "blocked": False, "last_failure_type": None}
             return
         if event == "implementation_revision":
@@ -95,14 +95,35 @@ class Journal:
             self.completed[key] = row
             return
         if event not in ("complete", "failed", "resume", "recovery_authorized",
-                         "setup_recovery_authorized"):
+                         "setup_recovery_authorized", "premutation_recovery_authorized"):
             raise ValueError(f"unknown journal event: {event}")
         if key not in self.pending:
             raise AmbiguousOperation(f"{event} has no start: {key}")
         if row["inputs_sha256"] != self.pending[key]["inputs_sha256"]:
             raise AmbiguousOperation(f"{event} input hash mismatch: {key}")
         attempt = self.attempts[key]
-        if event == "setup_recovery_authorized":
+        if event == "premutation_recovery_authorized":
+            source = row.get("source_checkpoint")
+            evidence = row.get("evidence_sha256")
+            evidence_body = row.get("evidence")
+            if (not _repair_update(key) or row.get("recoverable") is not True
+                    or not attempt["blocked"] or attempt["active"] or attempt["authorized"]
+                    or row.get("failed_attempt") != attempt["attempt"]
+                    or row.get("failed_error_type") != attempt["last_failure_type"]
+                    or attempt["last_failure_type"] != "APIConnectionError"
+                    or row.get("failure_boundary") != "teacher_scoring"
+                    or row.get("forward_backward_applied") is not False
+                    or row.get("optimizer_applied") is not False
+                    or row.get("training_updates_replayed") is not False
+                    or row.get("remote_training_runs_created") != []
+                    or not isinstance(source, str) or not source.startswith("tinker://") or "/weights/" not in source
+                    or not isinstance(evidence, str) or re.fullmatch(r"[0-9a-f]{64}", evidence) is None
+                    or not isinstance(evidence_body, dict)
+                    or hashlib.sha256(canonical(evidence_body).encode()).hexdigest() != evidence
+                    or not isinstance(row.get("reason"), str) or not row["reason"].strip()):
+                raise AmbiguousOperation(f"invalid pre-mutation recovery authorization: {key}")
+            attempt.update(recoverable=True, authorized=True, premutation_only=True, blocked=False)
+        elif event == "setup_recovery_authorized":
             source = row.get("source_checkpoint")
             evidence = row.get("evidence_sha256")
             evidence_body = row.get("evidence")
@@ -119,7 +140,8 @@ class Journal:
                     or hashlib.sha256(canonical(evidence_body).encode()).hexdigest() != evidence
                     or not isinstance(row.get("reason"), str) or not row["reason"].strip()):
                 raise AmbiguousOperation(f"invalid training-client setup recovery authorization: {key}")
-            attempt.update(recoverable=True, authorized=True, setup_only=True, blocked=False)
+            attempt.update(recoverable=True, authorized=True, setup_only=True,
+                           premutation_only=True, blocked=False)
         elif event == "recovery_authorized":
             blocked_setup_recovery = (attempt["blocked"] and attempt["recoverable"]
                                       and not attempt["active"]
@@ -176,8 +198,17 @@ class Journal:
         return (_repair_update(key) and attempt["recoverable"] and attempt["authorized"]
                 and attempt["setup_only"] and not attempt["blocked"])
 
+    def premutation_recoverable_pending(self):
+        """One verified repair attempt known to have failed before mutable model work."""
+        if len(self.pending) != 1:
+            return False
+        key = next(iter(self.pending))
+        attempt = self.attempts[key]
+        return (_repair_update(key) and attempt["recoverable"] and attempt["authorized"]
+                and attempt["premutation_only"] and not attempt["blocked"])
+
     def resumable_pending(self):
-        return self.recoverable_pending() or self.setup_recoverable_pending()
+        return self.recoverable_pending() or self.premutation_recoverable_pending()
 
     def _append(self, row):
         row = {"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(), **row}
@@ -204,8 +235,8 @@ class Journal:
             if operation in self.pending and self.pending[operation]["inputs_sha256"] != digest:
                 raise RuntimeError(f"resume contract changed: {operation}")
             sampling_resume = recoverable and self.recoverable_pending()
-            setup_resume = not recoverable and self.setup_recoverable_pending()
-            if operation not in self.pending or not (sampling_resume or setup_resume):
+            premutation_resume = not recoverable and self.premutation_recoverable_pending()
+            if operation not in self.pending or not (sampling_resume or premutation_resume):
                 raise AmbiguousOperation("unresolved operation(s): " + ", ".join(sorted(self.pending)))
             attempt = self.attempts[operation]
             self._record({"type": "resume", "operation": operation, "inputs_sha256": digest,

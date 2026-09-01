@@ -200,7 +200,8 @@ def measured_projection(root, journal, stage, measured):
         units[endpoint] = statistics.mean(token_cost(row[endpoint]["accounting"], prices) for row in physical)
     task_units = measured_task_units(journal, stage, prices)
     unreconciled = [row["operation"] for row in journal.rows
-                    if row["type"] == "recovery_authorized" and row.get("prior_accounting") == "unavailable"]
+                    if row["type"] in ("recovery_authorized", "premutation_recovery_authorized")
+                    and row.get("prior_accounting") == "unavailable"]
     return {**project_m2(task_units, units, prices), "task_units_usd": task_units,
             "measurement_units_usd": units, "price_source": snapshot,
             "m1_estimated_usd": cost_of_prefix(journal, "", prices),

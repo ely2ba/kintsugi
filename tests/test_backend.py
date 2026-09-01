@@ -490,6 +490,35 @@ class BackendTests(unittest.TestCase):
         api.score(sampler, [[1, 2]], [[{"tokens": [3]}, {"tokens": [4]}]])
         self.assertEqual(events, ["submit", "submit", "result", "result"])
 
+    def test_teacher_scoring_bounds_inflight_requests_without_reordering(self):
+        sampler, api = Sampler(), make_backend()
+        state = {"pending": 0, "maximum": 0, "submitted": [], "resolved": []}
+
+        class BoundedFuture(Future):
+            def __init__(self, value, index):
+                super().__init__(value)
+                self.index = index
+
+            def result(self):
+                state["pending"] -= 1
+                state["resolved"].append(self.index)
+                return super().result()
+
+        def score(model_input):
+            index = len(state["submitted"])
+            state["submitted"].append(index)
+            state["pending"] += 1
+            state["maximum"] = max(state["maximum"], state["pending"])
+            return BoundedFuture([None] + [-0.25] * (len(model_input.tokens) - 1), index)
+
+        sampler.compute_logprobs = score
+        groups = [[{"tokens": [index + 10, 99]} for index in range(65)]]
+        result = api.score(sampler, [[1, 2]], groups)
+        self.assertEqual(state["maximum"], backend.SCORING_WINDOW)
+        self.assertEqual(state["submitted"], list(range(65)))
+        self.assertEqual(state["resolved"], list(range(65)))
+        self.assertEqual(len(result["logprobs"][0]), 65)
+
     def test_one_attempt_guard_never_retries(self):
         calls = []
 
