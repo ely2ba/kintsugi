@@ -1,12 +1,12 @@
 {
   "code_hashes": {
     "SPEC.md": "9426de010a3e9e11fbc6733d90257c6518ad92299b54c1e591cfbed935572e1e",
-    "backend.py": "22c482f251844cddc95ae0518ddac7a720866d5949a13c0d0e02f306b150eee3",
-    "calibrate.py": "a8827ea98f9a497b7cb8a88213f91811372b2b6a504cf9e4de8b29d200c1c881",
+    "backend.py": "13ca10d3334a28e6b2a6a8c8482f5b4e6453b4f89c9609f6e645ce88966548b5",
+    "calibrate.py": "4b970ba7722aea30ec5b1a2632ccbb74f75a559d3aa9f2a5d4539e43652bcd8b",
     "closeout.py": "a7f2797639583f1b134971b3f9e996e807550080f3eab80a1b5317d7ab84b4a1",
     "costs.py": "2ef58828b0684c47dd23338836f923039b7dba126b6c4a9530bf4594806e77bc",
     "data.py": "c1eab282eb5625e38e42c675f0407b6104ec3fa5d6a6adf0d3a5528a5825cc5b",
-    "eval_cache.py": "df0f77a544467cda6eb737eac3c2ba36a8c02f5f0104cbe0f67968567007e6dc",
+    "eval_cache.py": "cafd2c4cc2c79d834215b86d78db29df414520e3c5857311efb4078ab26b9f11",
     "if_suite.py": "4d2a96ad2087bb3f57a094ad82d914431db021e4485317e8c71a7addf975f9b5",
     "m1.py": "7adcb0de2c61c78ab93a37c48c4b4a2381dcdd57c5101c50c39d8b8f1cd58f9b",
     "measure.py": "232df17242eeb3c1016c924ad8f054f5b725e8d5c31fc3c565ec2cab10d76278",
@@ -15,13 +15,13 @@
     "requirements.txt": "2098997a53e03d5e889348c97c71addf005f80cfaddb588716f53ca885311f89",
     "rules.py": "7f684091c67d431678170c9b347d1907381d99ed61078c60586dc31bca07a351",
     "tasks.py": "8809c652f77d1e597cbe7f4924a90b9ffbff5a30c3d7deb7a6c3d382469f234b",
-    "tests/test_backend.py": "3b08816bd7b611dcd5d556cdad70da2197103c86543ab6b3b34a778779c4c02c",
-    "tests/test_calibrate.py": "dadb4bea1c318e5dcec1ea92fc9d1bfe5bc09012fb76f99a7b588073cb237f06",
+    "tests/test_backend.py": "a2d5dc9917fcf2bb3da4a9b07859a34b947348d5868267754ff4b595477c6d48",
+    "tests/test_calibrate.py": "b1b3500b997f2b305e208c7f7075e497a8cbe3e538a50941d650dd96e25dad40",
     "tests/test_closeout.py": "9055829fb3d6da3472100903e533c15814790dca09d6e4d3efe07632bfe2a596",
     "tests/test_closeout_costs.py": "d4e41a911bdea30eb8e00666f7ad4b5a1ea5b7c5fd5490072df0371ba09ccd6e",
     "tests/test_costs.py": "ac21e3b59b82b389d3d2c18de24c6602abdaccff767321c381c4855122ca270c",
     "tests/test_data.py": "c31c40639569387c93604b7808b673ae08ee9cc4757a0e27696e3e4ab8d12efa",
-    "tests/test_eval_cache.py": "bfe5d1fd38ea39c3d89eada11ed6b6e0a4e452b4d73e9a49f9ba2047f98f3c25",
+    "tests/test_eval_cache.py": "95afbc0a103b5a41b15f45d8e91b90187d24399a672089c2aaae80eee1edeb67",
     "tests/test_m1.py": "895e22d0cdb308cd01a94b21df86ba020f8b64d2b8642a03b99f685b78dc3a7f",
     "tests/test_m1_closeout.py": "346406e514663b0b8b4a71b722d0ae84f4c60913e649c0b53490a1ad693eea09",
     "tests/test_measure.py": "54a4710404465404983b27fbdca09c7148f518e6f93348f68c14006836fb85ab",
@@ -66,8 +66,8 @@
     "manifests/tasks/xml_extraction.json": "e3714dda4f912ca5dae45959c1fb3f085837272739b0630a16e90987fca58be0"
   },
   "resume_from_freeze_commit": "8dc01c8a85ea2d1e6706a76ad4270d30b23438bd",
-  "revision_note": "Durable immutable sampling recovery with persisted request identities/responses, bounded same-identity transport retries and exclusive M1 driver ownership. User-authorized repeat of the interrupted legacy step-15 evaluation only; no training update replay. Original SPEC, input manifests, cycle-0 identity and append-only journal are preserved; unknown legacy sampling usage/timing remains unavailable.",
-  "test_commit": "9d672435a4461fc19cce55eb320173d03b856512",
-  "tested_on": "2026-08-31",
-  "tests_passed": 226
+  "revision_note": "Transient immutable sampler-client setup failures are now classified at the pre-request boundary. The user-authorized recovery is limited to the blocked screen evaluation after saved update 34: its first 128 responses are replayed from the valid cache and only the uncreated protected-IF call may run. No training update, frozen input, SPEC rule, or scientific result is changed.",
+  "test_commit": "4866ac9b5006957ce95d206e644be235724bddc9",
+  "tested_on": "2026-09-01",
+  "tests_passed": 231
 }
