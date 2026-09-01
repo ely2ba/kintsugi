@@ -379,6 +379,65 @@ class JournalTests(unittest.TestCase):
                 with self.assertRaises(AmbiguousOperation):
                     Journal(path)
 
+    def test_verified_repair_client_setup_failure_resumes_exact_update_once(self):
+        operation, inputs = "screen/task/0.0001/1/repair/update/005", {"step": 5, "from": "state-4"}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.jsonl"
+            journal = Journal(path)
+            digest = hashlib.sha256(canonical(inputs).encode()).hexdigest()
+            journal._record({"type": "inflight", "operation": operation, "inputs_sha256": digest})
+            journal._record({"type": "failed", "operation": operation, "inputs_sha256": digest,
+                             "attempt": 1, "attempt_status": "failed", "elapsed_seconds": 2.0,
+                             "retryable": False, "error_type": "APIConnectionError"})
+            self.assertFalse(Journal(path).resumable_pending())
+            Journal(path)._record({
+                "type": "setup_recovery_authorized", "operation": operation,
+                "inputs_sha256": digest, "recoverable": True, "failed_attempt": 1,
+                "failed_error_type": "APIConnectionError", "training_updates_replayed": False,
+                "source_checkpoint": "tinker://run/weights/state-4",
+                "remote_training_runs_created": [], "evidence": {},
+                "evidence_sha256": hashlib.sha256(canonical({}).encode()).hexdigest(),
+                "reason": "Remote metadata proves client creation never reached Tinker.",
+            })
+            resumed = Journal(path)
+            self.assertTrue(resumed.setup_recoverable_pending())
+            self.assertTrue(resumed.resumable_pending())
+            calls = []
+            result = resumed.call(operation, inputs, lambda: calls.append(5) or {"step": 5})
+            self.assertEqual(result, {"step": 5})
+            self.assertEqual(calls, [5])
+            completed = Journal(path).completed[operation]
+            self.assertEqual(completed["attempt"], 2)
+            self.assertFalse(Journal(path).pending)
+
+    def test_setup_recovery_rejects_unverified_or_nonrepair_work(self):
+        cases = (
+            ("screen/task/learn/update/005", "APIConnectionError", []),
+            ("screen/task/repair/update/005", "TimeoutError", []),
+            ("screen/task/repair/update/005", "APIConnectionError", ["new-run"]),
+        )
+        for operation, failure_type, created in cases:
+            with self.subTest(operation=operation, failure_type=failure_type, created=created), \
+                    tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "journal.jsonl"
+                journal = Journal(path)
+                digest = hashlib.sha256(canonical({}).encode()).hexdigest()
+                journal._record({"type": "inflight", "operation": operation, "inputs_sha256": digest})
+                journal._record({"type": "failed", "operation": operation, "inputs_sha256": digest,
+                                 "attempt": 1, "attempt_status": "failed", "elapsed_seconds": 1.0,
+                                 "retryable": False, "error_type": failure_type})
+                journal._append({
+                    "type": "setup_recovery_authorized", "operation": operation,
+                    "inputs_sha256": digest, "recoverable": True, "failed_attempt": 1,
+                    "failed_error_type": failure_type, "training_updates_replayed": False,
+                    "source_checkpoint": "tinker://run/weights/state-4",
+                    "remote_training_runs_created": created, "evidence": {},
+                    "evidence_sha256": hashlib.sha256(canonical({}).encode()).hexdigest(),
+                    "reason": "must reject",
+                })
+                with self.assertRaises(AmbiguousOperation):
+                    Journal(path)
+
     def test_marked_hard_interruption_can_resume_but_prior_duration_is_unknown(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "journal.jsonl"

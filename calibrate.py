@@ -1,14 +1,16 @@
 """M0/M1 execution primitives. There is deliberately no main-run command.
 
-The journal reuses completed operations. Only explicitly marked, durably cached
-sampling evaluations can resume; interrupted updates remain ambiguous. A
-completed update contains its optimizer checkpoint before the next operation.
+The journal reuses completed operations. Durably cached sampling evaluations can
+resume. A repair update may resume only when external metadata proves its failed
+attempt never created a remote training client. Every completed update contains
+its optimizer checkpoint before the next operation.
 """
 import datetime
 import hashlib
 import json
 import math
 import os
+import re
 import time
 from pathlib import Path
 
@@ -39,6 +41,13 @@ def _sampling_evaluation(operation):
             or operation.startswith("closeout/native/"))
 
 
+def _repair_update(operation):
+    """The only mutable operation eligible for verified setup-only replay."""
+    parts = operation.split("/")
+    return (len(parts) >= 4 and parts[-3:-1] == ["repair", "update"]
+            and re.fullmatch(r"\d{3}", parts[-1]) is not None)
+
+
 class Journal:
     """One append-only local execution record, not a scheduling framework."""
 
@@ -67,7 +76,8 @@ class Journal:
             self.pending[key] = row
             self.attempts[key] = {"attempt": 1, "active": True, "elapsed_seconds": 0.0,
                                   "timing_complete": True, "recoverable": row.get("recoverable", False),
-                                  "authorized": False, "blocked": False, "last_failure_type": None}
+                                  "authorized": False, "setup_only": False,
+                                  "blocked": False, "last_failure_type": None}
             return
         if event == "implementation_revision":
             revision = row["result"]
@@ -80,18 +90,37 @@ class Journal:
                     or row.get("pending_inputs_sha256") != pending["inputs_sha256"]
                     or row["inputs_sha256"] != hashlib.sha256(canonical(revision).encode()).hexdigest()
                     or revision["identity_freeze_sha256"] != identity.get("freeze_sha256")
-                    or "m1/origin" not in self.completed or not self.recoverable_pending()):
+                    or "m1/origin" not in self.completed or not self.resumable_pending()):
                 raise AmbiguousOperation(f"invalid local implementation revision: {key}")
             self.completed[key] = row
             return
-        if event not in ("complete", "failed", "resume", "recovery_authorized"):
+        if event not in ("complete", "failed", "resume", "recovery_authorized",
+                         "setup_recovery_authorized"):
             raise ValueError(f"unknown journal event: {event}")
         if key not in self.pending:
             raise AmbiguousOperation(f"{event} has no start: {key}")
         if row["inputs_sha256"] != self.pending[key]["inputs_sha256"]:
             raise AmbiguousOperation(f"{event} input hash mismatch: {key}")
         attempt = self.attempts[key]
-        if event == "recovery_authorized":
+        if event == "setup_recovery_authorized":
+            source = row.get("source_checkpoint")
+            evidence = row.get("evidence_sha256")
+            evidence_body = row.get("evidence")
+            if (not _repair_update(key) or row.get("recoverable") is not True
+                    or not attempt["blocked"] or attempt["active"] or attempt["authorized"]
+                    or row.get("failed_attempt") != attempt["attempt"]
+                    or row.get("failed_error_type") != attempt["last_failure_type"]
+                    or attempt["last_failure_type"] != "APIConnectionError"
+                    or row.get("training_updates_replayed") is not False
+                    or row.get("remote_training_runs_created") != []
+                    or not isinstance(source, str) or not source.startswith("tinker://") or "/weights/" not in source
+                    or not isinstance(evidence, str) or re.fullmatch(r"[0-9a-f]{64}", evidence) is None
+                    or not isinstance(evidence_body, dict)
+                    or hashlib.sha256(canonical(evidence_body).encode()).hexdigest() != evidence
+                    or not isinstance(row.get("reason"), str) or not row["reason"].strip()):
+                raise AmbiguousOperation(f"invalid training-client setup recovery authorization: {key}")
+            attempt.update(recoverable=True, authorized=True, setup_only=True, blocked=False)
+        elif event == "recovery_authorized":
             blocked_setup_recovery = (attempt["blocked"] and attempt["recoverable"]
                                       and not attempt["active"]
                                       and row.get("failed_attempt") == attempt["attempt"]
@@ -138,6 +167,18 @@ class Journal:
         attempt = self.attempts[key]
         return _sampling_evaluation(key) and attempt["recoverable"] and not attempt["blocked"]
 
+    def setup_recoverable_pending(self):
+        """One explicitly verified repair update whose client setup never reached Tinker."""
+        if len(self.pending) != 1:
+            return False
+        key = next(iter(self.pending))
+        attempt = self.attempts[key]
+        return (_repair_update(key) and attempt["recoverable"] and attempt["authorized"]
+                and attempt["setup_only"] and not attempt["blocked"])
+
+    def resumable_pending(self):
+        return self.recoverable_pending() or self.setup_recoverable_pending()
+
     def _append(self, row):
         row = {"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(), **row}
         with self.path.open("a", encoding="utf-8") as handle:
@@ -162,7 +203,9 @@ class Journal:
         if self.pending:
             if operation in self.pending and self.pending[operation]["inputs_sha256"] != digest:
                 raise RuntimeError(f"resume contract changed: {operation}")
-            if operation not in self.pending or not recoverable or not self.recoverable_pending():
+            sampling_resume = recoverable and self.recoverable_pending()
+            setup_resume = not recoverable and self.setup_recoverable_pending()
+            if operation not in self.pending or not (sampling_resume or setup_resume):
                 raise AmbiguousOperation("unresolved operation(s): " + ", ".join(sorted(self.pending)))
             attempt = self.attempts[operation]
             self._record({"type": "resume", "operation": operation, "inputs_sha256": digest,

@@ -488,6 +488,37 @@ class ImplementationRevisionTests(unittest.TestCase):
                     connect.assert_not_called()
                 self.assertEqual(path.read_bytes(), before)
 
+    def test_verified_repair_setup_recovery_accepts_one_implementation_revision(self):
+        operation, inputs = "screen/task/0.0001/1/repair/update/005", {"step": 5, "from": "state-4"}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runs/m1/journal.jsonl"
+            journal = Journal(path)
+            journal.call("m1/identity", self.identity, lambda: self.identity)
+            journal.call("m1/origin", self.identity, lambda: checkpoint("original"))
+            digest = hashlib.sha256(m1.calibrate.canonical(inputs).encode()).hexdigest()
+            journal._record({"type": "inflight", "operation": operation, "inputs_sha256": digest})
+            journal._record({"type": "failed", "operation": operation, "inputs_sha256": digest,
+                             "attempt": 1, "attempt_status": "failed", "elapsed_seconds": 1.0,
+                             "retryable": False, "error_type": "APIConnectionError"})
+            evidence = {"remote_training_runs_created": []}
+            journal._record({
+                "type": "setup_recovery_authorized", "operation": operation,
+                "inputs_sha256": digest, "recoverable": True, "failed_attempt": 1,
+                "failed_error_type": "APIConnectionError", "training_updates_replayed": False,
+                "source_checkpoint": "tinker://run/weights/state-4",
+                "remote_training_runs_created": [], "evidence": evidence,
+                "evidence_sha256": hashlib.sha256(m1.calibrate.canonical(evidence).encode()).hexdigest(),
+                "reason": "Verified client setup did not create a remote training run.",
+            })
+            revision = {key: self.checked[key] for key in (
+                "test_commit", "freeze_sha256", "identity_freeze_sha256",
+                "resume_from_freeze_commit", "original_test_commit")}
+            m1._record_implementation_revision(journal, revision)
+            resumed = Journal(path)
+            self.assertTrue(resumed.setup_recoverable_pending())
+            self.assertIn("m1/implementation/current-freeze", resumed.completed)
+            self.assertEqual(resumed.call(operation, inputs, lambda: {"step": 5})["step"], 5)
+
     def test_local_revision_event_cannot_hide_an_unseen_pending_operation(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "journal.jsonl"

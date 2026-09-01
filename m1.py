@@ -729,11 +729,11 @@ def calibrate_diversity(api, origin, root, journal, measurement):
 
 
 def _record_implementation_revision(journal, revision):
-    """Append only trusted local preflight provenance while evaluation is pending."""
+    """Append trusted local preflight provenance while authorized work is pending."""
     operation = f"m1/implementation/{revision['freeze_sha256']}"
     if not journal.pending or operation in journal.completed:
         return journal.call(operation, revision, lambda: revision)
-    if not journal.recoverable_pending():
+    if not journal.resumable_pending():
         raise calibrate.AmbiguousOperation("implementation revision cannot authorize pending paid work")
     pending_operation, pending = next(iter(journal.pending.items()))
     journal._record({"type": "implementation_revision", "operation": operation,
@@ -759,10 +759,10 @@ def run(root, *, project_id, keychain_service):
 def _run_locked(root, checked, *, project_id, keychain_service):
     """The complete journal/remote lifecycle is inside run's exclusive lock."""
     journal = calibrate.Journal(root / "runs/m1/journal.jsonl")
-    if journal.pending and not journal.recoverable_pending():
+    if journal.pending and not journal.resumable_pending():
         raise calibrate.AmbiguousOperation("unresolved M1 operation; no paid call will be retried")
     if journal.pending and not {"m1/identity", "m1/origin"} <= journal.completed.keys():
-        raise calibrate.AmbiguousOperation("evaluation recovery requires completed original identity and origin")
+        raise calibrate.AmbiguousOperation("recovery requires completed original identity and origin")
     implementation_resume = checked.get("resume_from_freeze_commit") is not None
     if implementation_resume and not {"m1/identity", "m1/origin"} <= journal.completed.keys():
         raise RuntimeError("implementation resume requires the existing completed original identity and origin")
