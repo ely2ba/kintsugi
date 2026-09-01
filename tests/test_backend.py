@@ -229,6 +229,23 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(client.saves[0][2], {"ttl_seconds": 86400, "overwrite": False})
         self.assertEqual(client.saves[1][2], {"ttl_seconds": 86400})
 
+    def test_dual_checkpoint_submits_both_before_waiting(self):
+        events = []
+
+        class OrderedClient(Client):
+            def save_state(self, name, ttl_seconds=None, overwrite=False):
+                events.append("submit-state")
+                future = super().save_state(name, ttl_seconds=ttl_seconds, overwrite=overwrite)
+                return NS(result=lambda: events.append("result-state") or future.result())
+
+            def save_weights_for_sampler(self, name, ttl_seconds=None):
+                events.append("submit-sampler")
+                future = super().save_weights_for_sampler(name, ttl_seconds=ttl_seconds)
+                return NS(result=lambda: events.append("result-sampler") or future.result())
+
+        make_backend().save(OrderedClient(), "branch-A", step=3)
+        self.assertEqual(events, ["submit-state", "submit-sampler", "result-state", "result-sampler"])
+
     def test_resume_save_rotates_two_short_lived_slots_then_durable_final(self):
         client, api = Client(), make_backend()
         api.checkpoint_ttl = 90 * 86400
@@ -247,6 +264,23 @@ class BackendTests(unittest.TestCase):
         self.assertIsNone(final["resume_slot"])
         self.assertEqual(final["ttl_seconds"], 90 * 86400)
         self.assertNotIn("overwrite", client.saves[-1][2])
+
+    def test_state_only_resume_save_rotates_without_sampler_export(self):
+        client, api = Client(), make_backend()
+        api.checkpoint_ttl = 90 * 86400
+        saved = [api.save_state(client, "probe-branch", step=step) for step in (1, 2, 3)]
+        self.assertEqual([row["name"] for row in saved],
+                         ["probe-branch-resume-1", "probe-branch-resume-0", "probe-branch-resume-1"])
+        self.assertEqual([row["resume_slot"] for row in saved], [1, 0, 1])
+        self.assertEqual(saved[0]["state_path"], saved[2]["state_path"])
+        self.assertTrue(all("sampler_path" not in row for row in saved))
+        self.assertEqual(client.saves, [
+            ("state", "probe-branch-resume-1", {"ttl_seconds": 2 * 86400, "overwrite": False}),
+            ("state", "probe-branch-resume-0", {"ttl_seconds": 2 * 86400, "overwrite": False}),
+            ("state", "probe-branch-resume-1", {"ttl_seconds": 2 * 86400, "overwrite": True}),
+        ])
+        with self.assertRaises(ValueError):
+            api.save_state(client, "probe-branch", step=0)
 
     def test_checkpoint_calls_bind_to_installed_pinned_sdk_signatures(self):
         try:
@@ -290,6 +324,13 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(saved["state_path"], f"tinker://run/weights/{label}")
             self.assertEqual(saved["sampler_path"], f"tinker://run/sampler_weights/{label}")
             self.assertIsNone(saved["resume_slot"])
+        sampler_calls = client.save_weights_for_sampler.call_count
+        state_only = api.save_state(client, "probe", step=3)
+        self.assertEqual(client.save_state.call_args.args, ("probe-resume-1",))
+        self.assertEqual(client.save_state.call_args.kwargs,
+                         {"ttl_seconds": 2 * 86400, "overwrite": True})
+        self.assertEqual(client.save_weights_for_sampler.call_count, sampler_calls)
+        self.assertEqual(state_only["state_path"], "tinker://run/weights/probe-resume-1")
 
     def test_sampling_parameters_alignment_and_accounting(self):
         sampler = Sampler()

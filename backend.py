@@ -392,9 +392,14 @@ class Backend:
         options = {"ttl_seconds": ttl}
         if resume:
             options["overwrite"] = step > 2
-        state = client.save_state(label, **options).result()
+        # The pinned TrainingClient reserves ordered sequence IDs at invocation.
+        # With no optimizer operation between these calls, both checkpoints see
+        # the same weights while their remote persistence can overlap.
+        state_future = client.save_state(label, **options)
+        sampler_future = client.save_weights_for_sampler(sampler_label, ttl_seconds=ttl)
+        state = state_future.result()
         state_path = _checkpoint_path(state.path, "weights")
-        sampled = client.save_weights_for_sampler(sampler_label, ttl_seconds=ttl).result()
+        sampled = sampler_future.result()
         sampler_path = _checkpoint_path(sampled.path, "sampler_weights")
         if urlparse(state_path).netloc != urlparse(sampler_path).netloc:
             raise RuntimeError("saved state and sampler belong to different training runs")
@@ -404,6 +409,25 @@ class Backend:
         return {"name": label, "sampler_name": sampler_label, "step": step,
                 "state_path": state_path, "sampler_path": sampler_path,
                 "ttl_seconds": ttl, "resume_slot": step % 2 if resume else None,
+                "accounting": accounting()}
+
+    def save_state(self, client, name, *, step):
+        """Save a rotating short-lived optimizer state, without sampler export.
+
+        Probe updates only need exact optimizer resumability: their registered
+        measurements use forward loss on the training client, not a sampler.
+        """
+        if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name)
+                or type(step) is not int or step < 1):
+            raise ValueError("safe checkpoint name and completed update step required")
+        label = f"{name}-resume-{step % 2}"
+        ttl = min(self.checkpoint_ttl, 2 * 86400)
+        state = client.save_state(label, ttl_seconds=ttl, overwrite=step > 2).result()
+        state_path = _checkpoint_path(state.path, "weights")
+        if urlparse(state_path).path.split("/")[-1] != label:
+            raise RuntimeError("saved state name differs from the requested resume slot")
+        return {"name": label, "step": step, "state_path": state_path,
+                "ttl_seconds": ttl, "resume_slot": step % 2,
                 "accounting": accounting()}
 
     def download_sampler(self, sampler_path, destination, *, max_bytes=2 * 1024**3):

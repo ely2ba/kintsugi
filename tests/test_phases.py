@@ -58,6 +58,14 @@ class PhaseBackend:
         self.saves.append((name, step, resume))
         return checkpoint
 
+    def save_state(self, client, name, *, step):
+        if client["step"] != step:
+            raise AssertionError("saved stale client")
+        checkpoint = {"state_path": f"{name}-state-{step}", "step": step}
+        self.states[checkpoint["state_path"]] = dict(client)
+        self.saves.append((name, step, "state_only"))
+        return checkpoint
+
 
 class PhaseTests(unittest.TestCase):
     def setUp(self):
@@ -309,6 +317,7 @@ class PhaseTests(unittest.TestCase):
                     self.assertEqual([row for update in backend.updates for row in update["rows"]], list(range(budget * 16)))
                     self.assertEqual(backend.branches, [("origin-state", False)])
                     self.assertTrue(all(update["warmup"] == 0 for update in backend.updates))
+                    self.assertTrue(all(save[2] == "state_only" for save in backend.saves))
                     before = (len(backend.branches), len(backend.updates), len(backend.saves), len(calls))
                     self.assertEqual(probe_sweep(backend, self.origin, probe, 1e-5, journal, "probe/test", evaluate, extended=extended), result)
                     self.assertEqual(before, (len(backend.branches), len(backend.updates), len(backend.saves), len(calls)))

@@ -7,6 +7,7 @@ Every remote operation is enclosed by the existing append-only M1 journal.
 """
 
 import argparse
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import fcntl
 import hashlib
 import json
@@ -370,6 +371,188 @@ def load_probe(root, candidate):
             "data_sha256": hashlib.sha256(calibrate.canonical(manifest["splits"]).encode()).hexdigest()}
 
 
+PROBE_STATE_WORKERS = 2
+
+
+def _current_implementation_freeze(journal, parent_identity):
+    revisions = [row["result"] for name, row in journal.completed.items()
+                 if name.startswith("m1/implementation/")]
+    return revisions[-1]["freeze_sha256"] if revisions else parent_identity["freeze_sha256"]
+
+
+def _probe_child_path(journal, state_branch):
+    digest = hashlib.sha256(state_branch.encode()).hexdigest()
+    return Path(journal.path).parent / "probe-trajectories" / f"{digest}.jsonl"
+
+
+def _child_accounting(child):
+    total = {key: 0 for key in ACCOUNTING_KEYS}
+    for row in child.completed.values():
+        accounting = row.get("result", {}).get("accounting")
+        if accounting is None:
+            continue
+        for key in ACCOUNTING_KEYS:
+            value = accounting.get(key, 0)
+            if type(value) is not int or value < 0:
+                raise RuntimeError("invalid child-journal accounting")
+            total[key] += value
+    return total
+
+
+def _validate_probe_child(child, state_branch, trajectory=None):
+    allowed = all(name == "child/identity" or name.startswith(state_branch + "/")
+                  for name in child.completed)
+    terminal = child.completed.get(state_branch + "/parallel-result")
+    if not allowed or terminal is None:
+        raise calibrate.AmbiguousOperation(f"invalid or incomplete probe child journal: {state_branch}")
+    recorded = terminal["result"]
+    status = recorded.get("status")
+    scientific = child.completed.get(state_branch + "/complete")
+    if status == "complete" and scientific is None:
+        raise calibrate.AmbiguousOperation(f"successful probe child lacks scientific completion: {state_branch}")
+    if status not in ("complete", "numerical_failure"):
+        raise calibrate.AmbiguousOperation(f"unknown probe child outcome: {state_branch}")
+    if status == "numerical_failure" and scientific is not None:
+        raise calibrate.AmbiguousOperation(f"failed probe child has scientific completion: {state_branch}")
+    if scientific is not None:
+        scientific_sha = hashlib.sha256(calibrate.canonical(scientific["result"]).encode()).hexdigest()
+        recorded_sha = hashlib.sha256(calibrate.canonical(recorded).encode()).hexdigest()
+        if scientific_sha != recorded_sha:
+            raise calibrate.AmbiguousOperation(f"probe child completion differs: {state_branch}")
+    if trajectory is not None:
+        expected = hashlib.sha256(calibrate.canonical(trajectory).encode()).hexdigest()
+        actual = hashlib.sha256(calibrate.canonical(recorded).encode()).hexdigest()
+        if actual != expected:
+            raise calibrate.AmbiguousOperation(f"probe child parallel result differs: {state_branch}")
+
+
+def _bounded_probe_states(journal, candidate_branch, jobs, execute, *, recipe=None):
+    """Run independent physical-state probe trajectories with two workers.
+
+    Real M1 journals get one fail-closed child journal per trajectory. Simple
+    in-memory test doubles retain the original serial behavior.
+    """
+    if not isinstance(getattr(journal, "path", None), (str, Path)):
+        return [{"trajectory": execute(job, journal), "child_journal": None} for job in jobs]
+    if len({job["branch"] for job in jobs}) != len(jobs):
+        raise ValueError("probe state branches must be unique")
+    required_recipe = {"candidate", "probe_class", "data_sha256", "learning_rate", "budget", "cadence"}
+    if not isinstance(recipe, dict) or set(recipe) != required_recipe:
+        raise ValueError("parallel probe panel requires its complete frozen recipe")
+    parent = journal.completed.get("m1/identity", {}).get("result")
+    if not isinstance(parent, dict) or "freeze_sha256" not in parent:
+        raise calibrate.AmbiguousOperation("parallel probe panel requires the frozen parent identity")
+    implementation_freeze = _current_implementation_freeze(journal, parent)
+    ordered = [{"state": job["state"], "checkpoint": job["checkpoint"], "branch": job["branch"]}
+               for job in jobs]
+    plan_body = {"version": 1, "candidate_branch": candidate_branch,
+                 "workers": PROBE_STATE_WORKERS, "parent_identity": parent,
+                 "identity_freeze_sha256": parent["freeze_sha256"],
+                 "implementation_freeze_sha256": implementation_freeze,
+                 **recipe,
+                 "states": ordered}
+    plan_sha256 = hashlib.sha256(calibrate.canonical(plan_body).encode()).hexdigest()
+    plan = {**plan_body, "plan_sha256": plan_sha256}
+    plan = journal.call(candidate_branch + "/panel-plan", plan, lambda: plan)
+
+    # Scan every planned child before any worker can submit remote work. A
+    # malformed, non-identity-first, or unresolved child blocks the whole panel.
+    children = []
+    for job in jobs:
+        path = _probe_child_path(journal, job["branch"])
+        child = calibrate.Journal(path)
+        if child.pending or (child.rows and child.rows[0].get("operation") != "child/identity"):
+            raise calibrate.AmbiguousOperation(f"unresolved or invalid probe child journal: {job['branch']}")
+        children.append((job, path, child))
+    for job, path, child in children:
+        identity = {"version": 1, "state_branch": job["branch"],
+                    "plan_sha256": plan["plan_sha256"], "parent_identity": parent,
+                    "identity_freeze_sha256": parent["freeze_sha256"],
+                    "implementation_freeze_sha256": implementation_freeze,
+                    "candidate": recipe["candidate"], "probe_class": recipe["probe_class"],
+                    "data_sha256": recipe["data_sha256"], "learning_rate": recipe["learning_rate"],
+                    "budget": recipe["budget"], "cadence": recipe["cadence"],
+                    "origin_checkpoint": job["checkpoint"]}
+        child.call("child/identity", identity, lambda identity=identity: identity)
+
+    # Existing imports are trust boundaries. Check all of them before the pool
+    # starts so a mutated child cannot coexist with newly submitted state work.
+    main_parent = Path(journal.path).parent
+    for job, path, child in children:
+        imported = journal.completed.get(job["branch"] + "/import")
+        if imported is None:
+            continue
+        _validate_probe_child(child, job["branch"])
+        metadata = imported.get("result", {}).get("child_journal", {})
+        relative = path.relative_to(main_parent).as_posix()
+        current_sha256 = data.sha256_file(path)
+        terminal_sha256 = hashlib.sha256(calibrate.canonical(
+            child.completed[job["branch"] + "/parallel-result"]["result"]).encode()).hexdigest()
+        if (metadata.get("path") != relative or metadata.get("sha256") != current_sha256
+                or metadata.get("result_sha256") != terminal_sha256):
+            raise calibrate.AmbiguousOperation(f"probe child changed after import: {job['branch']}")
+
+    # Submit lazily: once an infrastructure exception is observed, no further
+    # state starts. A returned numerical_failure is a scientific outcome and
+    # therefore does not stop the remaining registered states.
+    def run_child(job, child):
+        trajectory = execute(job, child)
+        trajectory = child.call(job["branch"] + "/parallel-result",
+                                {"parallel_result": True, "trajectory": trajectory}, lambda: trajectory)
+        _validate_probe_child(child, job["branch"], trajectory)
+        return trajectory
+
+    trajectories = [None] * len(children)
+    next_index, active, failure = 0, {}, None
+    with ThreadPoolExecutor(max_workers=PROBE_STATE_WORKERS,
+                            thread_name_prefix="m1-probe-state") as pool:
+        while next_index < min(PROBE_STATE_WORKERS, len(children)):
+            job, _, child = children[next_index]
+            active[pool.submit(run_child, job, child)] = next_index
+            next_index += 1
+        while active:
+            done, _ = wait(active, return_when=FIRST_COMPLETED)
+            for future in sorted(done, key=lambda item: active[item]):
+                index = active.pop(future)
+                try:
+                    trajectories[index] = future.result()
+                except Exception as error:
+                    if failure is None:
+                        failure = error
+            if failure is None:
+                while len(active) < PROBE_STATE_WORKERS and next_index < len(children):
+                    job, _, child = children[next_index]
+                    active[pool.submit(run_child, job, child)] = next_index
+                    next_index += 1
+    if failure is not None:
+        raise failure
+
+    # Import in registered panel order only after every child has completed.
+    # Recomputing the child hash on every replay makes any later mutation fail
+    # the already-committed main-journal input contract.
+    imported = []
+    for (job, path, child), trajectory in zip(children, trajectories):
+        _validate_probe_child(child, job["branch"], trajectory)
+        child_sha256 = data.sha256_file(path)
+        result_sha256 = hashlib.sha256(calibrate.canonical(trajectory).encode()).hexdigest()
+        relative = path.relative_to(main_parent).as_posix()
+        binding = {"state_branch": job["branch"], "plan_sha256": plan["plan_sha256"],
+                   "child_path": relative, "child_sha256": child_sha256,
+                   "result_sha256": result_sha256}
+        record = journal.call(job["branch"] + "/import", binding, lambda trajectory=trajectory,
+                              binding=binding, child=child: {
+                                  "trajectory": trajectory,
+                                  "curve": trajectory.get("curve", []),
+                                  "accounting": _child_accounting(child),
+                                  "child_journal": {"path": binding["child_path"],
+                                                    "sha256": binding["child_sha256"],
+                                                    "result_sha256": binding["result_sha256"]},
+                              })
+        imported.append({"trajectory": record["trajectory"],
+                         "child_journal": record["child_journal"]})
+    return imported
+
+
 def calibrate_probes(api, origin, root, panel, journal, measurement):
     """All candidate/LR references and full prospective state-panel trajectories.
 
@@ -406,17 +589,29 @@ def calibrate_probes(api, origin, root, panel, journal, measurement):
                     class_results.append(result)
                     continue
                 target = rules.probe_reference_target(reference["steps"], reference["losses"], budget, cadence)["reference_target"]
-                states, failed = [], []
-                for entry in panel:
-                    state_branch = branch + "/state/" + entry["state"]
-                    curve = calibrate.probe_sweep(
-                        api, entry["checkpoint"], probe, learning_rate, journal, state_branch,
+                jobs = [{"state": entry["state"], "checkpoint": entry["checkpoint"],
+                         "branch": branch + "/state/" + entry["state"]} for entry in panel]
+
+                def execute_state(job, state_journal):
+                    return calibrate.probe_sweep(
+                        api, job["checkpoint"], probe, learning_rate, state_journal, job["branch"],
                         lambda client, step: measure.evaluate_probe_loss(api, client, probe["val"]), extended=False)
+
+                trajectories = _bounded_probe_states(
+                    journal, branch, jobs, execute_state,
+                    recipe={"candidate": candidate, "probe_class": probe_class,
+                            "data_sha256": probe["data_sha256"], "learning_rate": learning_rate,
+                            "budget": budget, "cadence": cadence})
+                states, failed = [], []
+                for entry, job, executed in zip(panel, jobs, trajectories):
+                    curve, child = executed["trajectory"], executed["child_journal"]
                     if curve["status"] != "complete":
-                        failed.append({"state": entry["state"], "curve": curve})
+                        failed.append({"state": entry["state"], "curve": curve,
+                                       "child_journal": child})
                     else:
-                        states.append({"state": entry["state"], "branch": state_branch,
-                                       "steps": curve["steps"], "losses": curve["losses"]})
+                        states.append({"state": entry["state"], "branch": job["branch"],
+                                       "steps": curve["steps"], "losses": curve["losses"],
+                                       "child_journal": child})
                 if failed:
                     result = {"candidate": candidate, "learning_rate": learning_rate, "passes": False,
                               "failure": "invalid_state_trajectory", "failed_states": failed,

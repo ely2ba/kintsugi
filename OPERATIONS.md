@@ -169,6 +169,18 @@ use unique step names with the same short expiry. Physical A/B checkpoints recei
 separate durable saves. No-op B checkpoints alias A and reuse its measurements;
 they do not become zero-valued repair observations.
 
+On 2026-09-01, before the first probe trajectory, the user authorized an
+execution-only wall-time reduction. Probe updates now save optimizer state
+without exporting unused sampler weights; acquisition reference sweeps export
+sampler weights only at their unchanged registered evaluation points. When both
+checkpoint kinds are required, their ordered Tinker requests are submitted
+together and both finish before any later update. Independent physical-state
+probe trajectories run with at most two workers, each with a fresh optimizer and
+its own fail-closed append-only journal. The main journal freezes their ordered
+plan and imports each child hash, result, and token accounting before selection.
+Task data, seeds, update budgets, evaluation cadence, metrics, and selection rules
+are unchanged.
+
 Token accounting separates gradient-bearing targets, full train/forward inputs,
 sampling prefill/cache/completions, and teacher scoring. `compute_logprobs` usage
 is an estimate until billing events reconcile it. Monetary projections use the

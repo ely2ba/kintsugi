@@ -5,7 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from calibrate import AmbiguousOperation, InvalidMeasurement, Journal, batch_at, canonical, reference_sweep
+from calibrate import (AmbiguousOperation, InvalidMeasurement, Journal, batch_at, canonical,
+                       probe_sweep, reference_sweep)
 import eval_cache
 from protocol import LEARNING_RATES, REFERENCE_EVAL_STEPS
 
@@ -17,6 +18,7 @@ class FakeBackend:
         self.branches = []
         self.updates = []
         self.evaluations = []
+        self.full_saves, self.state_only_saves = [], []
         self.invalid_lr = invalid_lr
 
     def branch(self, state, resume=False):
@@ -35,11 +37,21 @@ class FakeBackend:
     def save(self, client, name, *, step, resume=False):
         state = f"{name}-state-{step}"
         self.states[state] = dict(client)
+        self.full_saves.append((client["lr"], step))
         return {"state_path": state, "sampler_path": f"{name}-sampler-{step}"}
+
+    def save_state(self, client, name, *, step):
+        state = f"{name}-state-{step}"
+        self.states[state] = dict(client)
+        self.state_only_saves.append((client["lr"], step))
+        return {"state_path": state}
 
     def evaluate(self, client, sampler, step):
         if client["step"] != step:
             raise AssertionError("evaluation used stale weights")
+        if ((step == 0 and sampler != "origin-sampler")
+                or (step and not sampler.endswith(f"-sampler-{step}"))):
+            raise AssertionError("evaluation used stale sampler weights")
         self.evaluations.append((client["lr"], step))
         return {"gate": -10 + min(step, 20) / 20,
                 "heldout": -12 + min(step, 55) / 55,
@@ -64,6 +76,12 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(len(backend.evaluations), 75)
         for trajectory in result["trajectories"]:
             self.assertEqual([p["step"] for p in trajectory["points"]], list(REFERENCE_EVAL_STEPS))
+        evaluated_updates = set(REFERENCE_EVAL_STEPS) - {0}
+        self.assertEqual([step for _, step in backend.full_saves],
+                         [step for _ in LEARNING_RATES for step in sorted(evaluated_updates)])
+        self.assertEqual([step for _, step in backend.state_only_saves],
+                         [step for _ in LEARNING_RATES
+                          for step in range(1, 121) if step not in evaluated_updates])
         # Everything is durable; replay makes no model, optimizer, save or eval calls.
         old_counts = (len(backend.updates), len(backend.evaluations), len(backend.branches))
         self.assertEqual(reference_sweep(backend, self.origin, self.task, Journal(self.path), backend.evaluate), result)
@@ -107,11 +125,11 @@ class ReferenceTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             reference_sweep(backend, self.origin, self.task, Journal(self.path), backend.evaluate)
         journal = Journal(self.path)
-        operation = "reference/test/1e-05/update/001"
+        operation = "reference/test/1e-05/update/005"
         self.assertEqual(set(journal.pending), {operation})
-        self.assertEqual(backend.updates, [(1e-5, 1)])
+        self.assertEqual(backend.updates, [(1e-5, step) for step in range(1, 6)])
         checkpoint = backend.interrupted_checkpoint
-        self.assertEqual(backend.states[checkpoint["state_path"]]["step"], 1)
+        self.assertEqual(backend.states[checkpoint["state_path"]]["step"], 5)
         # Mirrors an explicit verified recovery, not automatic handling of an
         # ambiguous call. Lost training loss stays null; scheduled evals remain.
         journal._append({"type": "complete", "operation": operation,
@@ -187,6 +205,64 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(batch_at(list(range(8)), 2, 3), [4, 5])
         with self.assertRaises(ValueError):
             batch_at(list(range(8)), 2, 5)
+
+
+class ProbeTests(unittest.TestCase):
+    class Backend:
+        def __init__(self):
+            self.states = {"origin-state": {"step": 0}}
+            self.branches, self.updates, self.state_saves = [], [], []
+
+        def branch(self, state, resume=False):
+            self.branches.append((state, resume))
+            return dict(self.states[state])
+
+        def train_step(self, client, rows, *, learning_rate, step, warmup_steps):
+            if warmup_steps != 0 or step != client["step"] + 1:
+                raise AssertionError("probe update did not resume exactly")
+            client["step"] = step
+            self.updates.append(step)
+            return {"valid": True, "accounting": {"train_tokens": len(rows)}}
+
+        def save_state(self, client, name, *, step):
+            state = f"{name}-state-{step}"
+            self.states[state] = dict(client)
+            self.state_saves.append((name, step))
+            return {"state_path": state, "resume_slot": step % 2}
+
+        def save(self, *args, **kwargs):
+            raise AssertionError("probe sweep must not export sampler weights")
+
+    def test_probe_updates_save_only_state_and_resume_without_replay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.jsonl"
+            backend = self.Backend()
+            probe = {"class": "structured", "candidate": "probe", "batch_size": 2,
+                     "train": [{"tokens": [1, 2]}] * 64, "data_sha256": "frozen-probe"}
+            evaluated = []
+
+            def evaluate(client, step):
+                self.assertEqual(client["step"], step)
+                evaluated.append(step)
+                return {"valid": True, "nll": 10.0 - step / 10}
+
+            class StopAfterState(Journal):
+                def call(self, operation, inputs, function, **kwargs):
+                    result = super().call(operation, inputs, function, **kwargs)
+                    if operation.endswith("/update/017"):
+                        raise InterruptedError("stop after optimizer state is durable")
+                    return result
+
+            with self.assertRaises(InterruptedError):
+                probe_sweep(backend, {"state_path": "origin-state"}, probe, 1e-4,
+                            StopAfterState(path), "probe/run", evaluate)
+            result = probe_sweep(backend, {"state_path": "origin-state"}, probe, 1e-4,
+                                 Journal(path), "probe/run", evaluate)
+            self.assertEqual(backend.updates, list(range(1, 33)))
+            self.assertEqual(backend.state_saves, [("probe-run", step) for step in range(1, 33)])
+            self.assertIn(("probe-run-state-17", True), backend.branches)
+            self.assertEqual(result["steps"], list(range(0, 33, 4)))
+            self.assertEqual(evaluated, list(range(0, 33, 4)))
 
 
 class JournalTests(unittest.TestCase):

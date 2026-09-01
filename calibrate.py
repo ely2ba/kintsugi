@@ -241,7 +241,11 @@ def reference_sweep(backend, origin, task, journal, evaluate):
                     result = backend.train_step(client, batch_at(task["reference"], batch_size, step),
                                                 learning_rate=learning_rate, step=step, warmup_steps=10)
                     if result.get("valid", True):
-                        result = {**result, "checkpoint": backend.save(client, branch.replace("/", "-"), step=step, resume=True)}
+                        name = branch.replace("/", "-")
+                        checkpoint = (backend.save(client, name, step=step, resume=True)
+                                      if step in REFERENCE_EVAL_STEPS
+                                      else backend.save_state(client, name, step=step))
+                        result = {**result, "checkpoint": checkpoint}
                     return result
 
                 result = journal.call(operation, {**identity, "step": step, "from": state}, update)
@@ -250,7 +254,7 @@ def reference_sweep(backend, origin, task, journal, evaluate):
                     trajectory["failure"] = result.get("failure", "numerically invalid")
                     break
                 state = result["checkpoint"]["state_path"]
-                sampler_path = result["checkpoint"]["sampler_path"]
+                sampler_path = result["checkpoint"].get("sampler_path", sampler_path)
                 # If this update was loaded from the journal, no live client was
                 # created. The next unevaluated/update operation restores its state.
             if step in REFERENCE_EVAL_STEPS:
@@ -422,7 +426,8 @@ def probe_sweep(backend, origin, probe, learning_rate, journal, branch, evaluate
                 result = backend.train_step(client, batch_at(probe["train"], probe["batch_size"], step),
                                             learning_rate=learning_rate, step=step, warmup_steps=0)
                 if result.get("valid", True):
-                    result = {**result, "checkpoint": backend.save(client, branch.replace("/", "-"), step=step, resume=True)}
+                    result = {**result, "checkpoint": backend.save_state(
+                        client, branch.replace("/", "-"), step=step)}
                 return result
             result = journal.call(f"{branch}/update/{step:03d}", {**identity, "step": step, "from": state}, update)
             if not result.get("valid", True):

@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -575,6 +577,130 @@ class ProbeStageTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 18 * 3)
         self.assertTrue(all(len(row["states"]) == 2 for row in result["candidates"]))
         self.assertFalse(any("/noise/" in call["branch"] for call in self.calls))
+
+
+class ParallelProbeStateTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "runs/m1/journal.jsonl"
+        self.parent = {"freeze_sha256": "frozen", "project_sha256": "project",
+                       "model": m1.MODEL, "lora_seed": m1.LORA_SEED}
+        self.journal = Journal(self.path)
+        self.journal.call("m1/identity", self.parent, lambda: self.parent)
+        self.recipe = {"candidate": "test", "probe_class": "structured", "data_sha256": "probe-data",
+                       "learning_rate": 1e-5, "budget": 32, "cadence": 4}
+        self.jobs = [{"state": f"s{index}", "checkpoint": checkpoint(f"s{index}"),
+                      "branch": f"probe/test/1e-05/state/s{index}"} for index in range(4)]
+
+    def _execute(self, counters, barrier=None, statuses=None):
+        lock = threading.Lock()
+
+        def execute(job, child):
+            def paid():
+                with lock:
+                    counters["calls"] += 1
+                    counters["active"] += 1
+                    counters["maximum"] = max(counters["maximum"], counters["active"])
+                try:
+                    if barrier is not None and job["state"] in ("s0", "s1"):
+                        barrier.wait(timeout=2)
+                    if job["state"] == "s0":
+                        time.sleep(0.03)
+                    status = (statuses or {}).get(job["state"], "complete")
+                    return {"trajectory": {
+                                "status": status,
+                                "curve": [{"step": 0, "loss": float(job["state"][1:])}],
+                                "steps": [0], "losses": [float(job["state"][1:])]},
+                            "accounting": {"forward_tokens": 10}}
+                finally:
+                    with lock:
+                        counters["active"] -= 1
+
+            trajectory = child.call(job["branch"] + "/fake-paid",
+                                    {"checkpoint": job["checkpoint"]}, paid)["trajectory"]
+            if trajectory["status"] == "complete":
+                trajectory = child.call(job["branch"] + "/complete", {"trajectory": trajectory},
+                                        lambda: trajectory)
+            return trajectory
+
+        return execute
+
+    def test_two_workers_overlap_but_results_and_imports_use_panel_order(self):
+        counters = {"calls": 0, "active": 0, "maximum": 0}
+        results = m1._bounded_probe_states(
+            self.journal, "probe/test/1e-05", self.jobs,
+            self._execute(counters, barrier=threading.Barrier(2), statuses={"s0": "numerical_failure"}),
+            recipe=self.recipe)
+        self.assertEqual(counters, {"calls": 4, "active": 0, "maximum": 2})
+        self.assertEqual([row["trajectory"]["losses"][0] for row in results], [0.0, 1.0, 2.0, 3.0])
+        self.assertEqual([row["trajectory"]["status"] for row in results],
+                         ["numerical_failure", "complete", "complete", "complete"])
+        imports = [row["operation"] for row in self.journal.rows
+                   if row["type"] == "complete" and row["operation"].endswith("/import")]
+        self.assertEqual(imports, [job["branch"] + "/import" for job in self.jobs])
+        plan = self.journal.completed["probe/test/1e-05/panel-plan"]["result"]
+        self.assertEqual(plan["workers"], 2)
+        self.assertEqual([row["state"] for row in plan["states"]], ["s0", "s1", "s2", "s3"])
+        for job, result in zip(self.jobs, results):
+            imported = self.journal.completed[job["branch"] + "/import"]["result"]
+            self.assertEqual(imported["accounting"]["forward_tokens"], 10)
+            self.assertEqual(imported["child_journal"], result["child_journal"])
+            child = Journal(Path(self.path).parent / result["child_journal"]["path"])
+            self.assertEqual(child.rows[0]["operation"], "child/identity")
+            identity = child.completed["child/identity"]["result"]
+            self.assertEqual(identity["plan_sha256"], plan["plan_sha256"])
+            self.assertEqual(identity["parent_identity"], self.parent)
+
+    def test_replay_reuses_children_and_detects_post_import_mutation(self):
+        counters = {"calls": 0, "active": 0, "maximum": 0}
+        execute = self._execute(counters)
+        first = m1._bounded_probe_states(self.journal, "probe/test/1e-05", self.jobs[:2], execute,
+                                         recipe=self.recipe)
+        child_paths = [Path(self.path).parent / row["child_journal"]["path"] for row in first]
+        before = [path.read_bytes() for path in child_paths]
+        replay = m1._bounded_probe_states(Journal(self.path), "probe/test/1e-05", self.jobs[:2], execute,
+                                          recipe=self.recipe)
+        self.assertEqual(replay, first)
+        self.assertEqual(counters["calls"], 2)
+        self.assertEqual([path.read_bytes() for path in child_paths], before)
+
+        child = Journal(child_paths[0])
+        child.call(self.jobs[0]["branch"] + "/post-import-mutation", {},
+                   lambda: {"note": "must invalidate binding"})
+        with self.assertRaisesRegex(m1.calibrate.AmbiguousOperation, "changed after import"):
+            m1._bounded_probe_states(Journal(self.path), "probe/test/1e-05", self.jobs[:2], execute,
+                                     recipe=self.recipe)
+        self.assertEqual(counters["calls"], 2)
+
+    def test_ambiguous_child_preflight_blocks_every_submission(self):
+        ambiguous_path = m1._probe_child_path(self.journal, self.jobs[1]["branch"])
+        child = Journal(ambiguous_path)
+        with self.assertRaises(TimeoutError):
+            child.call("child/identity", {}, lambda: (_ for _ in ()).throw(TimeoutError()))
+        counters = {"calls": 0, "active": 0, "maximum": 0}
+        with self.assertRaisesRegex(m1.calibrate.AmbiguousOperation, "unresolved or invalid"):
+            m1._bounded_probe_states(self.journal, "probe/test/1e-05", self.jobs,
+                                     self._execute(counters), recipe=self.recipe)
+        self.assertEqual(counters["calls"], 0)
+
+    def test_infrastructure_exception_stops_lazy_dispatch(self):
+        started, both_started = [], threading.Event()
+
+        def execute(job, child):
+            started.append(job["state"])
+            if len(started) == 2:
+                both_started.set()
+            if job["state"] == "s0":
+                both_started.wait(timeout=2)
+                raise RuntimeError("transport broke")
+            time.sleep(0.05)
+            return {"status": "numerical_failure", "curve": [], "steps": [], "losses": []}
+
+        with self.assertRaisesRegex(RuntimeError, "transport broke"):
+            m1._bounded_probe_states(self.journal, "probe/test/1e-05", self.jobs, execute,
+                                     recipe=self.recipe)
+        self.assertEqual(set(started), {"s0", "s1"})
 
 
 def diversity_result(valid_per_item=2, *, length=10, truncated=0.0):
