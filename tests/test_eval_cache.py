@@ -96,6 +96,15 @@ def records(directory):
 
 
 class EvaluationCacheTests(unittest.TestCase):
+    def test_public_transport_classifier_is_narrow(self):
+        self.assertTrue(eval_cache.is_transient_sampling_transport(ConnectionError("lost")))
+        self.assertTrue(eval_cache.is_transient_sampling_transport(TimeoutError("late")))
+        for status in (408, 429, 500, 502, 599):
+            self.assertTrue(eval_cache.is_transient_sampling_transport(StatusError(status)))
+        for status in (400, 401, 404, 410, 600):
+            self.assertFalse(eval_cache.is_transient_sampling_transport(StatusError(status)))
+        self.assertFalse(eval_cache.is_transient_sampling_transport(ValueError("bad output")))
+
     def test_midbatch_502_preserves_identity_alignment_and_accounting(self):
         transport, sampler = Transport(), immutable_sampler()
         transport.send_errors[3] = [StatusError(502)]

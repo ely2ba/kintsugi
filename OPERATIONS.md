@@ -45,6 +45,17 @@ they must not be represented as zero. The recovery repeats only the evaluation,
 with the original prompts, seed schedule and sampling parameters, before update
 16 can run. No scientific contract or input manifest is changed.
 
+On 2026-09-01, the local runner exited during
+`screen/arithmetic_derivations/3e-05/1/learn/evaluate/034` after a Tinker
+`APIConnectionError`. Update 34 had already completed and both of its remote
+exports were verified intact. All 128 responses from the task-gate sampling
+call were durably cached; no protected-IF sampling call had been created. The
+failure occurred while establishing the next immutable sampler client, before
+that call could receive a sampling identity. The author explicitly approved
+resuming only this read-only evaluation from the saved update-34 checkpoint and
+cache. No learning update is repeated, and no response is selected or discarded
+from its scientific value.
+
 Initialization first launched under `938fb1f`. Before any sampling, scoring,
 forward pass, or training update, an overlapping diversity-repeat seed range
 was corrected in `138b24d` and re-frozen in `8dc01c8`. The original untrained

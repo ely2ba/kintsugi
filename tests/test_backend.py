@@ -312,6 +312,55 @@ class BackendTests(unittest.TestCase):
             api.sample(sampler, [[1, 2]], samples=1, max_tokens=3, temperature=0, seed=1)
         self.assertEqual(sampler.calls, [])
 
+    def test_immutable_sampler_construction_transports_only_inside_evaluation_scope(self):
+        try:
+            version = importlib.metadata.version("tinker")
+        except importlib.metadata.PackageNotFoundError:
+            self.skipTest("run the SDK boundary test with .venv/bin/python")
+        self.assertEqual(version, backend.SDK_VERSION)
+        import httpx
+        import tinker
+
+        request = httpx.Request("POST", "https://example.invalid/sample")
+        failures = [
+            tinker.APIConnectionError(request=request),
+            tinker.APIStatusError("unavailable", response=httpx.Response(503, request=request), body=None),
+        ]
+        path = "tinker://run/sampler_weights/A-step-000015"
+        for failure in failures:
+            def fail(**kwargs):
+                raise failure
+
+            api = make_backend(NS(create_sampling_client=fail))
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(eval_cache.SamplingTransportError) as raised:
+                    with eval_cache.evaluation_scope(directory, "recoverable-evaluation", "a" * 64):
+                        api.sampler(path)
+                self.assertIs(raised.exception.__cause__, failure)
+                self.assertEqual(list(Path(directory).iterdir()), [])
+                # The identical transient failure outside a designated sampling
+                # evaluation remains the original fail-closed SDK exception.
+                with self.assertRaises(type(failure)) as outside:
+                    api.sampler(path)
+                self.assertIs(outside.exception, failure)
+
+    def test_immutable_sampler_construction_permanent_error_stays_fail_closed(self):
+        class StatusError(RuntimeError):
+            status_code = 400
+
+        failure = StatusError("permanent")
+
+        def fail(**kwargs):
+            raise failure
+
+        api = make_backend(NS(create_sampling_client=fail))
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(StatusError) as raised:
+                with eval_cache.evaluation_scope(directory, "recoverable-evaluation", "a" * 64):
+                    api.sampler("tinker://run/sampler_weights/A-step-000015")
+            self.assertIs(raised.exception, failure)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
     def test_evaluation_scope_never_retries_mutable_sampling_or_training(self):
         class FailingSampler(Sampler):
             def sample(self, prompt, samples, params):

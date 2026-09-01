@@ -312,7 +312,13 @@ def _decode(response):
     return deserialize_proto_response(base64.b64decode(response["base64"], validate=True), types.SampleResponse)
 
 
-def _retryable(error):
+def is_transient_sampling_transport(error):
+    """Classify only connection, timeout, 408/429 and 5xx transport failures.
+
+    This public predicate is shared by immutable sampler construction and the
+    identity-preserving request path. It deliberately excludes application,
+    validation, cache and permanent HTTP failures.
+    """
     status = getattr(error, "status_code", None)
     if status is not None:
         return status in (408, 429) or 500 <= status <= 599
@@ -357,7 +363,7 @@ async def _complete(scope, sampler, unit, prompt, params, normalize):
             call = _receive(sampler, unit) if phase == "retrieve" else _send(sampler, unit, prompt, params)
             value = await asyncio.wait_for(call, timeout=min(REQUEST_TIMEOUT, remaining))
         except Exception as error:
-            retryable = _retryable(error)
+            retryable = is_transient_sampling_transport(error)
             _failure(scope, unit, phase, error, retryable)
             if not retryable:
                 raise EvaluationRecoveryError("permanent sampling failure; original identity retained") from error

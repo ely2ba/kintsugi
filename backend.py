@@ -188,10 +188,21 @@ class Backend:
 
     def sampler(self, sampler_path):
         path = _checkpoint_path(sampler_path, "sampler_weights")
-        sampler = self.service.create_sampling_client(
-            model_path=path,
-            base_model=MODEL, retry_config=self.retry_config,
-        )
+        try:
+            sampler = self.service.create_sampling_client(
+                model_path=path,
+                base_model=MODEL, retry_config=self.retry_config,
+            )
+        except Exception as error:
+            # Creating the immutable SDK client happens before sample_batch can
+            # persist a request. Only a journal-designated sampling evaluation
+            # may classify this boundary as recoverable transport interruption.
+            from eval_cache import (SamplingTransportError, current_scope,
+                                    is_transient_sampling_transport)
+            if current_scope() is not None and is_transient_sampling_transport(error):
+                raise SamplingTransportError(
+                    "transient immutable sampler-client construction failure") from error
+            raise
         # Only this saved-checkpoint boundary opts into evaluation recovery.
         # repair_step's freshly refreshed live student is deliberately untagged.
         sampler._kintsugi_immutable_model_path = path

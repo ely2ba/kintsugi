@@ -67,7 +67,7 @@ class Journal:
             self.pending[key] = row
             self.attempts[key] = {"attempt": 1, "active": True, "elapsed_seconds": 0.0,
                                   "timing_complete": True, "recoverable": row.get("recoverable", False),
-                                  "authorized": False, "blocked": False}
+                                  "authorized": False, "blocked": False, "last_failure_type": None}
             return
         if event == "implementation_revision":
             revision = row["result"]
@@ -92,11 +92,18 @@ class Journal:
             raise AmbiguousOperation(f"{event} input hash mismatch: {key}")
         attempt = self.attempts[key]
         if event == "recovery_authorized":
+            blocked_setup_recovery = (attempt["blocked"] and attempt["recoverable"]
+                                      and not attempt["active"]
+                                      and row.get("failed_attempt") == attempt["attempt"]
+                                      and row.get("failed_error_type") == attempt["last_failure_type"]
+                                      and attempt["last_failure_type"] == "APIConnectionError")
+            legacy_interruption_recovery = not attempt["blocked"]
             if (not _sampling_evaluation(key) or row.get("recoverable") is not True
                     or not isinstance(row.get("reason"), str) or not row["reason"].strip()
-                    or attempt["authorized"] or attempt["blocked"]):
+                    or attempt["authorized"]
+                    or not (legacy_interruption_recovery or blocked_setup_recovery)):
                 raise AmbiguousOperation(f"invalid evaluation recovery authorization: {key}")
-            attempt.update(recoverable=True, authorized=True)
+            attempt.update(recoverable=True, authorized=True, blocked=False)
         elif event == "resume":
             previous_status = "interrupted" if attempt["active"] else "failed"
             if (not attempt["recoverable"] or attempt["blocked"]
@@ -114,7 +121,8 @@ class Journal:
                     or (row["retryable"] and not attempt["recoverable"])):
                 raise AmbiguousOperation(f"invalid failed attempt: {key}")
             attempt["elapsed_seconds"] += elapsed
-            attempt.update(active=False, blocked=not row["retryable"])
+            attempt.update(active=False, blocked=not row["retryable"],
+                           last_failure_type=row.get("error_type"))
         else:
             if "attempt" in row and row["attempt"] != attempt["attempt"]:
                 raise AmbiguousOperation(f"completion attempt mismatch: {key}")

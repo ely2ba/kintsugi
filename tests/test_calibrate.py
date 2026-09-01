@@ -257,6 +257,52 @@ class JournalTests(unittest.TestCase):
             self.assertEqual(completed["elapsed_seconds"], 3.0)
             self.assertFalse(completed["timing_complete"])
 
+    def test_explicit_authorization_recovers_only_matching_blocked_sampling_setup_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.jsonl"
+            # Record the historical failure shape directly: before this fix the
+            # setup exception was not translated at the sampler boundary.
+            journal = Journal(path)
+            digest = hashlib.sha256(canonical({"state": "immutable"}).encode()).hexdigest()
+            journal._record({"type": "inflight", "operation": self.operation,
+                             "inputs_sha256": digest, "recoverable": True})
+            journal._record({"type": "failed", "operation": self.operation,
+                             "inputs_sha256": digest, "attempt": 1,
+                             "attempt_status": "failed", "elapsed_seconds": 2.0,
+                             "retryable": False, "error_type": "APIConnectionError"})
+            blocked = Journal(path)
+            self.assertFalse(blocked.recoverable_pending())
+            blocked._record({"type": "recovery_authorized", "operation": self.operation,
+                             "inputs_sha256": digest, "recoverable": True,
+                             "failed_attempt": 1, "failed_error_type": "APIConnectionError",
+                             "reason": "User approved resuming the cached evaluation after setup failed."})
+            resumed = Journal(path)
+            self.assertTrue(resumed.recoverable_pending())
+            result = resumed.call(self.operation, {"state": "immutable"},
+                                  lambda: {"score": 1}, recoverable=True)
+            self.assertEqual(result, {"score": 1})
+            self.assertEqual(Journal(path).completed[self.operation]["attempt"], 2)
+
+    def test_blocked_authorization_rejects_mismatched_or_permanent_failures(self):
+        for failure_type, authorized_type in (("EvaluationRecoveryError", "EvaluationRecoveryError"),
+                                              ("APIConnectionError", "ConnectionError")):
+            with self.subTest(failure_type=failure_type, authorized_type=authorized_type), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "journal.jsonl"
+                journal = Journal(path)
+                digest = hashlib.sha256(canonical({"state": "immutable"}).encode()).hexdigest()
+                journal._record({"type": "inflight", "operation": self.operation,
+                                 "inputs_sha256": digest, "recoverable": True})
+                journal._record({"type": "failed", "operation": self.operation,
+                                 "inputs_sha256": digest, "attempt": 1,
+                                 "attempt_status": "failed", "elapsed_seconds": 2.0,
+                                 "retryable": False, "error_type": failure_type})
+                journal._append({"type": "recovery_authorized", "operation": self.operation,
+                                 "inputs_sha256": digest, "recoverable": True,
+                                 "failed_attempt": 1, "failed_error_type": authorized_type,
+                                 "reason": "must not authorize"})
+                with self.assertRaises(AmbiguousOperation):
+                    Journal(path)
+
     def test_marked_hard_interruption_can_resume_but_prior_duration_is_unknown(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "journal.jsonl"
