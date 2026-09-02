@@ -42,10 +42,18 @@ def _sampling_evaluation(operation):
 
 
 def _repair_update(operation):
-    """The only mutable operation eligible for verified setup-only replay."""
+    """A repair update eligible for tightly verified pre-mutation replay."""
     parts = operation.split("/")
     return (len(parts) >= 4 and parts[-3:-1] == ["repair", "update"]
             and re.fullmatch(r"\d{3}", parts[-1]) is not None)
+
+
+def _sft_update(operation):
+    """A registered SFT update whose optimizer boundary is explicit."""
+    parts = operation.split("/")
+    return (len(parts) >= 3 and parts[-2] == "update"
+            and re.fullmatch(r"\d{3}", parts[-1]) is not None
+            and ("learn" in parts or parts[0] in ("reference", "probe")))
 
 
 class Journal:
@@ -106,13 +114,24 @@ class Journal:
             source = row.get("source_checkpoint")
             evidence = row.get("evidence_sha256")
             evidence_body = row.get("evidence")
-            if (not _repair_update(key) or row.get("recoverable") is not True
+            boundary = row.get("failure_boundary")
+            repair_scoring = (_repair_update(key) and boundary == "teacher_scoring"
+                              and row.get("forward_backward_applied") is False)
+            parts = key.split("/")
+            step = int(parts[-1]) if _sft_update(key) else 0
+            previous = self.completed.get("/".join(parts[:-1] + [f"{step - 1:03d}"])) if step > 1 else None
+            previous_source = (previous or {}).get("result", {}).get("checkpoint", {}).get("state_path")
+            sft_preoptimizer = (_sft_update(key) and boundary == "forward_backward_before_optimizer"
+                                and row.get("forward_backward_applied") == "unknown"
+                                and row.get("remote_gradient_state_abandoned") is True
+                                and row.get("failed_client_process_exited") is True
+                                and row.get("checkpoint_created") is False
+                                and step > 1 and row.get("source_checkpoint") == previous_source)
+            if (not (repair_scoring or sft_preoptimizer) or row.get("recoverable") is not True
                     or not attempt["blocked"] or attempt["active"] or attempt["authorized"]
                     or row.get("failed_attempt") != attempt["attempt"]
                     or row.get("failed_error_type") != attempt["last_failure_type"]
                     or attempt["last_failure_type"] != "APIConnectionError"
-                    or row.get("failure_boundary") != "teacher_scoring"
-                    or row.get("forward_backward_applied") is not False
                     or row.get("optimizer_applied") is not False
                     or row.get("training_updates_replayed") is not False
                     or row.get("remote_training_runs_created") != []
@@ -199,12 +218,13 @@ class Journal:
                 and attempt["setup_only"] and not attempt["blocked"])
 
     def premutation_recoverable_pending(self):
-        """One verified repair attempt known to have failed before mutable model work."""
+        """One verified update known to have failed before any weight mutation."""
         if len(self.pending) != 1:
             return False
         key = next(iter(self.pending))
         attempt = self.attempts[key]
-        return (_repair_update(key) and attempt["recoverable"] and attempt["authorized"]
+        return ((_repair_update(key) or _sft_update(key))
+                and attempt["recoverable"] and attempt["authorized"]
                 and attempt["premutation_only"] and not attempt["blocked"])
 
     def resumable_pending(self):

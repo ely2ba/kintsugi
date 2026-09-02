@@ -1,10 +1,11 @@
 """Offline phase integration checks: finite local states, no SDK or API calls."""
 
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
 
-from calibrate import Journal, learning_phase, probe_sweep, repair_phase
+from calibrate import Journal, canonical, learning_phase, probe_sweep, repair_phase
 from protocol import ORDERS, schedule_seed
 
 
@@ -264,6 +265,61 @@ class PhaseTests(unittest.TestCase):
                 before = (len(backend.branches), len(backend.updates), len(backend.saves), len(calls))
                 self.assertEqual(self.learn(backend, evaluate, journal=Journal(path)), result)
                 self.assertEqual(before, (len(backend.branches), len(backend.updates), len(backend.saves), len(calls)))
+
+    def test_learning_preoptimizer_recovery_abandons_client_and_restores_prior_optimizer(self):
+        class APIConnectionError(Exception):
+            pass
+
+        class FailOnceBackend(PhaseBackend):
+            failed = False
+
+            def save(self, client, name, *, step, resume=False):
+                state = f"tinker://run/weights/{name}-state-{step}"
+                sampler = f"tinker://run/sampler_weights/{name}-sampler-{step}"
+                checkpoint = {"state_path": state, "sampler_path": sampler, "step": step}
+                self.states[state] = dict(client)
+                self.saves.append((name, step, resume))
+                return checkpoint
+
+            def train_step(self, client, rows, *, learning_rate, step, warmup_steps):
+                if step == 3 and not self.failed:
+                    self.failed = True
+                    raise APIConnectionError("connection lost before optimizer call")
+                return super().train_step(client, rows, learning_rate=learning_rate,
+                                          step=step, warmup_steps=warmup_steps)
+
+        with tempfile.TemporaryDirectory() as directory:
+            backend = FailOnceBackend()
+            path = Path(directory) / "learning.jsonl"
+            evaluate, _ = self.learning_evaluator(
+                lambda step: {"gate": 0.8, "if_score": 38 if step < 3 else 35})
+            with self.assertRaises(APIConnectionError):
+                self.learn(backend, evaluate, journal=Journal(path))
+            operation = "learn/test/update/003"
+            journal = Journal(path)
+            attempt = journal.attempts[operation]
+            self.assertTrue(attempt["blocked"])
+            digest = journal.pending[operation]["inputs_sha256"]
+            evidence = {"old_client": "abandoned", "source_step": 2}
+            journal._record({
+                "type": "premutation_recovery_authorized", "operation": operation,
+                "inputs_sha256": digest, "recoverable": True, "failed_attempt": 1,
+                "failed_error_type": "APIConnectionError",
+                "failure_boundary": "forward_backward_before_optimizer",
+                "forward_backward_applied": "unknown", "optimizer_applied": False,
+                "remote_gradient_state_abandoned": True, "failed_client_process_exited": True,
+                "checkpoint_created": False,
+                "training_updates_replayed": False,
+                "source_checkpoint": "tinker://run/weights/learn-test-state-2",
+                "remote_training_runs_created": [], "evidence": evidence,
+                "evidence_sha256": hashlib.sha256(canonical(evidence).encode()).hexdigest(),
+                "reason": "Abandon the failed client and restore the durable step-2 optimizer state.",
+            })
+            result = self.learn(backend, evaluate, journal=Journal(path))
+            self.assertEqual(result["A"]["step"], 3)
+            self.assertEqual([update["step"] for update in backend.updates], [1, 2, 3])
+            self.assertIn(("tinker://run/weights/learn-test-state-2", True), backend.branches)
+            self.assertEqual(Journal(path).completed[operation]["attempt"], 2)
 
     def test_repair_resume_after_durable_criterion_restores_without_replay(self):
         for success_step in (5, 10):

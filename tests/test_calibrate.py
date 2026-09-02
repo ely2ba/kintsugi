@@ -465,6 +465,75 @@ class JournalTests(unittest.TestCase):
             self.assertEqual(resumed.call(operation, inputs, lambda: {"step": 6})["step"], 6)
             self.assertEqual(Journal(path).completed[operation]["attempt"], 2)
 
+    def test_verified_sft_preoptimizer_failure_resumes_from_checkpoint(self):
+        previous = "screen/task/3e-05/2/learn/update/029"
+        operation = "screen/task/3e-05/2/learn/update/030"
+        source = "tinker://run/weights/state-29"
+        inputs = {"step": 30, "from": source}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.jsonl"
+            journal = Journal(path)
+            previous_inputs = {"step": 29, "from": "tinker://run/weights/state-28"}
+            journal.call(previous, previous_inputs,
+                         lambda: {"checkpoint": {"state_path": source}, "step": 29})
+            digest = hashlib.sha256(canonical(inputs).encode()).hexdigest()
+            journal._record({"type": "inflight", "operation": operation, "inputs_sha256": digest})
+            journal._record({"type": "failed", "operation": operation, "inputs_sha256": digest,
+                             "attempt": 1, "attempt_status": "failed", "elapsed_seconds": 1.0,
+                             "retryable": False, "error_type": "APIConnectionError"})
+            evidence = {"source_checkpoint": "state-29", "old_client": "abandoned"}
+            journal._record({
+                "type": "premutation_recovery_authorized", "operation": operation,
+                "inputs_sha256": digest, "recoverable": True, "failed_attempt": 1,
+                "failed_error_type": "APIConnectionError",
+                "failure_boundary": "forward_backward_before_optimizer",
+                "forward_backward_applied": "unknown", "optimizer_applied": False,
+                "remote_gradient_state_abandoned": True, "failed_client_process_exited": True,
+                "checkpoint_created": False,
+                "training_updates_replayed": False,
+                "source_checkpoint": source,
+                "remote_training_runs_created": [], "evidence": evidence,
+                "evidence_sha256": hashlib.sha256(canonical(evidence).encode()).hexdigest(),
+                "reason": "The failed client is abandoned before restoring the preceding optimizer checkpoint.",
+            })
+            resumed = Journal(path)
+            self.assertTrue(resumed.premutation_recoverable_pending())
+            self.assertEqual(resumed.call(operation, inputs, lambda: {"step": 30})["step"], 30)
+            self.assertEqual(Journal(path).completed[operation]["attempt"], 2)
+
+    def test_sft_premutation_recovery_requires_abandoning_remote_gradient_state(self):
+        previous = "reference/task/1e-05/update/001"
+        operation = "reference/task/1e-05/update/002"
+        source = "tinker://run/weights/state-1"
+        inputs = {"step": 2, "from": source}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "journal.jsonl"
+            journal = Journal(path)
+            journal.call(previous, {"step": 1, "from": "tinker://run/weights/origin"},
+                         lambda: {"checkpoint": {"state_path": source}, "step": 1})
+            digest = hashlib.sha256(canonical(inputs).encode()).hexdigest()
+            journal._record({"type": "inflight", "operation": operation, "inputs_sha256": digest})
+            journal._record({"type": "failed", "operation": operation, "inputs_sha256": digest,
+                             "attempt": 1, "attempt_status": "failed", "elapsed_seconds": 1.0,
+                             "retryable": False, "error_type": "APIConnectionError"})
+            evidence = {"remote_status": "ambiguous"}
+            journal._append({
+                "type": "premutation_recovery_authorized", "operation": operation,
+                "inputs_sha256": digest, "recoverable": True, "failed_attempt": 1,
+                "failed_error_type": "APIConnectionError",
+                "failure_boundary": "forward_backward_before_optimizer",
+                "forward_backward_applied": "unknown", "optimizer_applied": False,
+                "remote_gradient_state_abandoned": False, "failed_client_process_exited": True,
+                "checkpoint_created": False,
+                "training_updates_replayed": False,
+                "source_checkpoint": source,
+                "remote_training_runs_created": [], "evidence": evidence,
+                "evidence_sha256": hashlib.sha256(canonical(evidence).encode()).hexdigest(),
+                "reason": "must reject reuse of ambiguous remote gradient state",
+            })
+            with self.assertRaises(AmbiguousOperation):
+                Journal(path)
+
     def test_marked_hard_interruption_can_resume_but_prior_duration_is_unknown(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "journal.jsonl"
